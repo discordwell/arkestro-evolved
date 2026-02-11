@@ -28,55 +28,78 @@ type Config struct {
 	Predictor       *predict.Predictor
 	Logger          *log.Logger
 	StaticCacheBust string
+	BasePath        string
 }
 
 type UI struct {
-	st   *store.Store
-	pred *predict.Predictor
-	log  *log.Logger
-	tmpl *template.Template
-	bust string
+	st       *store.Store
+	pred     *predict.Predictor
+	log      *log.Logger
+	tmpl     *template.Template
+	bust     string
+	basePath string
 }
 
 func New(cfg Config) *UI {
 	if cfg.Logger == nil {
 		cfg.Logger = log.New(log.Writer(), "", log.LstdFlags)
 	}
+	basePath := normalizeBasePath(cfg.BasePath)
 
 	funcs := template.FuncMap{
 		"money": moneyUSD,
 		"pct":   pct,
 		"since": since,
 		"sub":   subInt64,
+		"path": func(p string) string {
+			return joinBasePath(basePath, p)
+		},
 	}
 
 	tmpl := template.Must(template.New("base").Funcs(funcs).ParseFS(web.TemplatesFS, "templates/*.html"))
 
-	return &UI{st: cfg.Store, pred: cfg.Predictor, log: cfg.Logger, tmpl: tmpl, bust: cfg.StaticCacheBust}
+	return &UI{
+		st:       cfg.Store,
+		pred:     cfg.Predictor,
+		log:      cfg.Logger,
+		tmpl:     tmpl,
+		bust:     cfg.StaticCacheBust,
+		basePath: basePath,
+	}
 }
 
 func (u *UI) Register(mux *http.ServeMux) {
+	appMux := http.NewServeMux()
+
 	static, err := fs.Sub(web.StaticFS, "static")
 	if err != nil {
 		panic(err)
 	}
-	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServerFS(static)))
+	appMux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServerFS(static)))
 
-	mux.HandleFunc("GET /", u.wrap(u.handleDashboard))
-	mux.HandleFunc("GET /suppliers", u.wrap(u.handleSuppliers))
-	mux.HandleFunc("POST /suppliers", u.wrap(u.handleCreateSupplier))
-	mux.HandleFunc("POST /suppliers/", u.wrap(u.handleSupplierPost))
+	appMux.HandleFunc("GET /", u.wrap(u.handleDashboard))
+	appMux.HandleFunc("GET /suppliers", u.wrap(u.handleSuppliers))
+	appMux.HandleFunc("POST /suppliers", u.wrap(u.handleCreateSupplier))
+	appMux.HandleFunc("POST /suppliers/", u.wrap(u.handleSupplierPost))
 
-	mux.HandleFunc("GET /events", u.wrap(u.handleEvents))
-	mux.HandleFunc("GET /events/new", u.wrap(u.handleNewEvent))
-	mux.HandleFunc("POST /events", u.wrap(u.handleCreateEvent))
+	appMux.HandleFunc("GET /events", u.wrap(u.handleEvents))
+	appMux.HandleFunc("GET /events/new", u.wrap(u.handleNewEvent))
+	appMux.HandleFunc("POST /events", u.wrap(u.handleCreateEvent))
 
-	mux.HandleFunc("GET /events/", u.wrap(u.handleEvent))
-	mux.HandleFunc("POST /events/", u.wrap(u.handleEventPost))
+	appMux.HandleFunc("GET /events/", u.wrap(u.handleEvent))
+	appMux.HandleFunc("POST /events/", u.wrap(u.handleEventPost))
 
-	mux.HandleFunc("GET /api/health", u.wrap(u.handleAPIHealth))
-	mux.HandleFunc("GET /api/events", u.wrap(u.handleAPIEvents))
-	mux.HandleFunc("GET /api/events/", u.wrap(u.handleAPIEventScoped))
+	appMux.HandleFunc("GET /api/health", u.wrap(u.handleAPIHealth))
+	appMux.HandleFunc("GET /api/events", u.wrap(u.handleAPIEvents))
+	appMux.HandleFunc("GET /api/events/", u.wrap(u.handleAPIEventScoped))
+
+	if u.basePath == "" {
+		mux.Handle("/", appMux)
+		return
+	}
+
+	mux.Handle(u.basePath+"/", http.StripPrefix(u.basePath, appMux))
+	mux.Handle(u.basePath, http.RedirectHandler(u.basePath+"/", http.StatusPermanentRedirect))
 }
 
 type handler func(http.ResponseWriter, *http.Request) error
@@ -97,6 +120,10 @@ func (u *UI) wrap(h handler) http.HandlerFunc {
 func (u *UI) render(w http.ResponseWriter, name string, data any) error {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	return u.tmpl.ExecuteTemplate(w, name, data)
+}
+
+func (u *UI) path(p string) string {
+	return joinBasePath(u.basePath, p)
 }
 
 func (u *UI) handleDashboard(w http.ResponseWriter, r *http.Request) error {
@@ -145,7 +172,7 @@ func (u *UI) handleCreateSupplier(w http.ResponseWriter, r *http.Request) error 
 	if _, err := u.st.CreateSupplier(ctx, name, email, tags, risk, perf); err != nil {
 		return err
 	}
-	http.Redirect(w, r, "/suppliers", http.StatusSeeOther)
+	http.Redirect(w, r, u.path("/suppliers"), http.StatusSeeOther)
 	return nil
 }
 
@@ -170,7 +197,7 @@ func (u *UI) handleSupplierPost(w http.ResponseWriter, r *http.Request) error {
 	default:
 		return errors.New("unknown action")
 	}
-	http.Redirect(w, r, "/suppliers", http.StatusSeeOther)
+	http.Redirect(w, r, u.path("/suppliers"), http.StatusSeeOther)
 	return nil
 }
 
@@ -204,7 +231,7 @@ func (u *UI) handleCreateEvent(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	http.Redirect(w, r, fmt.Sprintf("/events/%d", e.ID), http.StatusSeeOther)
+	http.Redirect(w, r, u.path(fmt.Sprintf("/events/%d", e.ID)), http.StatusSeeOther)
 	return nil
 }
 
@@ -437,7 +464,7 @@ func (u *UI) handleEventPost(w http.ResponseWriter, r *http.Request) error {
 		q.Set("line_items_created", strconv.Itoa(result.LineItemsCreated))
 		q.Set("quotes_upserted", strconv.Itoa(result.QuotesUpserted))
 		q.Set("awards_upserted", strconv.Itoa(result.AwardsUpserted))
-		http.Redirect(w, r, fmt.Sprintf("/events/%d?%s", id, q.Encode()), http.StatusSeeOther)
+		http.Redirect(w, r, u.path(fmt.Sprintf("/events/%d?%s", id, q.Encode())), http.StatusSeeOther)
 		return nil
 	case "simulate_round":
 		items, err := u.st.ListLineItemsByEvent(ctx, id)
@@ -559,7 +586,7 @@ func (u *UI) handleEventPost(w http.ResponseWriter, r *http.Request) error {
 		return errors.New("unknown action")
 	}
 
-	http.Redirect(w, r, fmt.Sprintf("/events/%d", id), http.StatusSeeOther)
+	http.Redirect(w, r, u.path(fmt.Sprintf("/events/%d", id)), http.StatusSeeOther)
 	return nil
 }
 
@@ -710,6 +737,30 @@ func parseIDFromPath(pth, prefix string) (int64, error) {
 		return 0, errors.New("invalid id")
 	}
 	return id, nil
+}
+
+func normalizeBasePath(p string) string {
+	p = strings.TrimSpace(p)
+	if p == "" || p == "/" {
+		return ""
+	}
+	return "/" + strings.Trim(p, "/")
+}
+
+func joinBasePath(basePath, p string) string {
+	if p == "" {
+		if basePath == "" {
+			return "/"
+		}
+		return basePath
+	}
+	if !strings.HasPrefix(p, "/") {
+		p = "/" + p
+	}
+	if basePath == "" {
+		return p
+	}
+	return basePath + p
 }
 
 func parseMoneyToCents(s string) (int64, error) {

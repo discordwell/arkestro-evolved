@@ -4,22 +4,22 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Arkessro | Suppliers</title>
-  <link rel="stylesheet" href="/static/style.css?v={{.Bust}}" />
+  <link rel="stylesheet" href="{{path "/static/style.css"}}?v={{.Bust}}" />
 </head>
 <body>
   <div class="nav">
     <div class="brand"><span class="brand-badge"></span> Arkessro</div>
     <div class="nav-links">
-      <a href="/">Dashboard</a>
-      <a href="/events">Events</a>
-      <a href="/suppliers">Suppliers</a>
+      <a href="{{path "/"}}">Dashboard</a>
+      <a href="{{path "/events"}}">Events</a>
+      <a href="{{path "/suppliers"}}">Suppliers</a>
     </div>
   </div>
 
   <div class="container">
     <div class="row" style="justify-content: space-between">
       <h1>Suppliers</h1>
-      <a class="btn secondary" href="/events/new">New Event</a>
+      <a class="btn secondary" href="{{path "/events/new"}}">New Event</a>
     </div>
     <div class="sub">This demo treats suppliers as the competitive set for pricing predictions and quote collection.</div>
 
@@ -28,7 +28,7 @@
         <h2>Add Supplier</h2>
         <span class="small">Stored locally in SQLite</span>
       </div>
-      <form class="form" method="post" action="/suppliers">
+      <form class="form" method="post" action="{{path "/suppliers"}}">
         <div class="span3">
           <label>Name</label>
           <input name="name" placeholder="Acme Metals" required />
@@ -83,7 +83,7 @@
             <td>{{.Name}}</td>
             <td class="small">{{.Email}}</td>
             <td>
-              <form id="sup{{.ID}}" method="post" action="/suppliers/{{.ID}}">
+              <form id="sup{{.ID}}" method="post" action="{{path (printf "/suppliers/%d" .ID)}}">
                 <input type="hidden" name="action" value="update_profile" />
               </form>
               <input form="sup{{.ID}}" name="tags" value="{{.Tags}}" placeholder="metals, machining" />

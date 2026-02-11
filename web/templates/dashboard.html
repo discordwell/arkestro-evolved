@@ -4,16 +4,16 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Arkessro | Dashboard</title>
-  <link rel="stylesheet" href="/static/style.css?v={{.Bust}}" />
+  <link rel="stylesheet" href="{{path "/static/style.css"}}?v={{.Bust}}" />
 </head>
 <body>
   <div class="nav">
     <div class="brand"><span class="brand-badge"></span> Arkessro <span class="badge">oneshot build</span></div>
     <div class="nav-links">
-      <a href="/">Dashboard</a>
-      <a href="/events">Events</a>
-      <a href="/suppliers">Suppliers</a>
-      <a href="/api/health">API</a>
+      <a href="{{path "/"}}">Dashboard</a>
+      <a href="{{path "/events"}}">Events</a>
+      <a href="{{path "/suppliers"}}">Suppliers</a>
+      <a href="{{path "/api/health"}}">API</a>
     </div>
   </div>
 
@@ -37,8 +37,8 @@
         </div>
       </div>
       <div style="margin-top: 14px" class="row">
-        <a class="btn" href="/events/new">New Event</a>
-        <a class="btn secondary" href="/suppliers">Add Supplier</a>
+        <a class="btn" href="{{path "/events/new"}}">New Event</a>
+        <a class="btn secondary" href="{{path "/suppliers"}}">Add Supplier</a>
       </div>
     </div>
 
@@ -48,7 +48,7 @@
       <div class="card">
         <div class="card-header">
           <h2>Recent Events</h2>
-          <a class="small" href="/events">See all</a>
+          <a class="small" href="{{path "/events"}}">See all</a>
         </div>
         {{if .Events}}
           <table class="table">
@@ -63,7 +63,7 @@
               {{range $i, $e := .Events}}
                 {{if lt $i 8}}
                 <tr>
-                  <td><a href="/events/{{$e.ID}}">{{$e.Title}}</a></td>
+                  <td><a href="{{path (printf "/events/%d" $e.ID)}}">{{$e.Title}}</a></td>
                   <td><span class="badge">{{$e.Status}}</span></td>
                   <td class="small">{{since $e.CreatedAt}}</td>
                 </tr>
@@ -79,7 +79,7 @@
       <div class="card">
         <div class="card-header">
           <h2>Suppliers</h2>
-          <a class="small" href="/suppliers">Manage</a>
+          <a class="small" href="{{path "/suppliers"}}">Manage</a>
         </div>
         {{if .Suppliers}}
           <table class="table">
@@ -107,7 +107,7 @@
     </div>
 
     <div style="height: 20px"></div>
-    <div class="small">Tip: start at <a href="/suppliers">Suppliers</a>, then create an <a href="/events/new">Event</a>, then add line items and quotes.</div>
+    <div class="small">Tip: start at <a href="{{path "/suppliers"}}">Suppliers</a>, then create an <a href="{{path "/events/new"}}">Event</a>, then add line items and quotes.</div>
   </div>
 </body>
 </html>

@@ -4,15 +4,15 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Arkessro | Event</title>
-  <link rel="stylesheet" href="/static/style.css?v={{.Bust}}" />
+  <link rel="stylesheet" href="{{path "/static/style.css"}}?v={{.Bust}}" />
 </head>
 <body>
   <div class="nav">
     <div class="brand"><span class="brand-badge"></span> Arkessro</div>
     <div class="nav-links">
-      <a href="/">Dashboard</a>
-      <a href="/events">Events</a>
-      <a href="/suppliers">Suppliers</a>
+      <a href="{{path "/"}}">Dashboard</a>
+      <a href="{{path "/events"}}">Events</a>
+      <a href="{{path "/suppliers"}}">Suppliers</a>
     </div>
   </div>
 
@@ -24,7 +24,7 @@
       </div>
       <div class="row">
         <span class="badge">status: {{.Event.Status}}</span>
-        <a class="btn secondary" href="/events">Back</a>
+        <a class="btn secondary" href="{{path "/events"}}">Back</a>
       </div>
     </div>
     {{if .Event.Description}}<div class="sub">{{.Event.Description}}</div>{{end}}
@@ -46,7 +46,7 @@
           <span class="small">Workflow + award</span>
         </div>
 
-        <form class="form" method="post" action="/events/{{.Event.ID}}">
+        <form class="form" method="post" action="{{path (printf "/events/%d" .Event.ID)}}">
           <input type="hidden" name="action" value="set_status" />
           <div class="span3">
             <label>Status</label>
@@ -63,14 +63,14 @@
 
         <div style="height: 10px"></div>
 
-        <form method="post" action="/events/{{.Event.ID}}">
+        <form method="post" action="{{path (printf "/events/%d" .Event.ID)}}">
           <input type="hidden" name="action" value="award_lowest" />
           <button class="btn secondary" type="submit">Award Lowest Quote (each line item)</button>
         </form>
 
         <div style="height: 10px"></div>
 
-        <form method="post" action="/events/{{.Event.ID}}">
+        <form method="post" action="{{path (printf "/events/%d" .Event.ID)}}">
           <input type="hidden" name="action" value="award_best_value" />
           <input type="hidden" name="w_cost" value="{{.Weights.Cost}}" />
           <input type="hidden" name="w_risk" value="{{.Weights.Risk}}" />
@@ -81,7 +81,7 @@
 
         <div style="height: 10px"></div>
 
-        <form method="post" action="/events/{{.Event.ID}}">
+        <form method="post" action="{{path (printf "/events/%d" .Event.ID)}}">
           <input type="hidden" name="action" value="simulate_round" />
           <button class="btn secondary" type="submit">Simulate Supplier Round</button>
         </form>
@@ -107,7 +107,7 @@
         <div style="height: 12px"></div>
 
         <h3>Best Value Weights</h3>
-        <form class="form" method="get" action="/events/{{.Event.ID}}">
+        <form class="form" method="get" action="{{path (printf "/events/%d" .Event.ID)}}">
           <div class="span2">
             <label>Cost</label>
             <input name="w_cost" value="{{.Weights.Cost}}" />
@@ -133,7 +133,7 @@
           <span class="small">Targets auto-predicted + replay import</span>
         </div>
 
-        <form class="form" method="post" action="/events/{{.Event.ID}}">
+        <form class="form" method="post" action="{{path (printf "/events/%d" .Event.ID)}}">
           <input type="hidden" name="action" value="add_line_item" />
           <div class="span3">
             <label>Name</label>
@@ -164,7 +164,7 @@
         <div style="height: 12px"></div>
 
         <h3>Import Historical Replay CSV</h3>
-        <form class="form" method="post" action="/events/{{.Event.ID}}" enctype="multipart/form-data">
+        <form class="form" method="post" action="{{path (printf "/events/%d" .Event.ID)}}" enctype="multipart/form-data">
           <input type="hidden" name="action" value="import_replay_csv" />
           <div class="span6">
             <label>CSV file</label>
@@ -323,7 +323,7 @@
       </div>
 
       {{if and .Items .Suppliers}}
-      <form class="form" method="post" action="/events/{{.Event.ID}}">
+      <form class="form" method="post" action="{{path (printf "/events/%d" .Event.ID)}}">
         <input type="hidden" name="action" value="add_quote" />
         <div class="span3">
           <label>Line item</label>
@@ -494,7 +494,7 @@
       <div class="small">Backtest appears once a line item has at least 2 rounds of quotes (or imported replay rounds).</div>
       {{end}}
       <div style="height: 10px"></div>
-      <div class="small">JSON endpoints: <a href="/api/events/{{.Event.ID}}/copilot">/api/events/{{.Event.ID}}/copilot</a> and <a href="/api/events/{{.Event.ID}}/copilot/backtest">/api/events/{{.Event.ID}}/copilot/backtest</a></div>
+      <div class="small">JSON endpoints: <a href="{{path (printf "/api/events/%d/copilot" .Event.ID)}}">{{path (printf "/api/events/%d/copilot" .Event.ID)}}</a> and <a href="{{path (printf "/api/events/%d/copilot/backtest" .Event.ID)}}">{{path (printf "/api/events/%d/copilot/backtest" .Event.ID)}}</a></div>
     </div>
 
   </div>

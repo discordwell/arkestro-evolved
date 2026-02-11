@@ -4,22 +4,22 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Arkessro | Events</title>
-  <link rel="stylesheet" href="/static/style.css?v={{.Bust}}" />
+  <link rel="stylesheet" href="{{path "/static/style.css"}}?v={{.Bust}}" />
 </head>
 <body>
   <div class="nav">
     <div class="brand"><span class="brand-badge"></span> Arkessro</div>
     <div class="nav-links">
-      <a href="/">Dashboard</a>
-      <a href="/events">Events</a>
-      <a href="/suppliers">Suppliers</a>
+      <a href="{{path "/"}}">Dashboard</a>
+      <a href="{{path "/events"}}">Events</a>
+      <a href="{{path "/suppliers"}}">Suppliers</a>
     </div>
   </div>
 
   <div class="container">
     <div class="row" style="justify-content: space-between">
       <h1>Events</h1>
-      <a class="btn" href="/events/new">New Event</a>
+      <a class="btn" href="{{path "/events/new"}}">New Event</a>
     </div>
     <div class="sub">A sourcing event groups line items, quotes, and awards.</div>
 
@@ -43,7 +43,7 @@
           {{range .Events}}
           <tr>
             <td class="small">{{.ID}}</td>
-            <td><a href="/events/{{.ID}}">{{.Title}}</a></td>
+            <td><a href="{{path (printf "/events/%d" .ID)}}">{{.Title}}</a></td>
             <td><span class="badge">{{.Status}}</span></td>
             <td class="small">{{since .CreatedAt}}</td>
           </tr>

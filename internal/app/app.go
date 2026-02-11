@@ -22,6 +22,7 @@ type Config struct {
 	PredictionSeed  int64
 	Logger          *log.Logger
 	StaticCacheBust string
+	BasePath        string
 }
 
 type App struct {
@@ -67,6 +68,7 @@ func New(cfg Config) (*App, error) {
 		Predictor:       pred,
 		Logger:          cfg.Logger,
 		StaticCacheBust: cfg.StaticCacheBust,
+		BasePath:        cfg.BasePath,
 	})
 
 	mux := http.NewServeMux()

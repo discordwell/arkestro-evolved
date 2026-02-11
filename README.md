@@ -75,6 +75,12 @@ make build
 ./arkessro -db ./data/dev.db -addr 127.0.0.1:8080
 ```
 
+Optional subpath hosting (e.g. behind reverse proxy at `/cheapchain`):
+
+```bash
+./arkessro -db ./data/dev.db -addr 127.0.0.1:8080 -base-path /cheapchain
+```
+
 ## Test
 
 ```bash

@@ -4,27 +4,27 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Arkessro | New Event</title>
-  <link rel="stylesheet" href="/static/style.css?v={{.Bust}}" />
+  <link rel="stylesheet" href="{{path "/static/style.css"}}?v={{.Bust}}" />
 </head>
 <body>
   <div class="nav">
     <div class="brand"><span class="brand-badge"></span> Arkessro</div>
     <div class="nav-links">
-      <a href="/">Dashboard</a>
-      <a href="/events">Events</a>
-      <a href="/suppliers">Suppliers</a>
+      <a href="{{path "/"}}">Dashboard</a>
+      <a href="{{path "/events"}}">Events</a>
+      <a href="{{path "/suppliers"}}">Suppliers</a>
     </div>
   </div>
 
   <div class="container">
     <div class="row" style="justify-content: space-between">
       <h1>New Event</h1>
-      <a class="btn secondary" href="/events">Back</a>
+      <a class="btn secondary" href="{{path "/events"}}">Back</a>
     </div>
     <div class="sub">Create a sourcing event, then add line items and collect supplier quotes.</div>
 
     <div class="card">
-      <form class="form" method="post" action="/events">
+      <form class="form" method="post" action="{{path "/events"}}">
         <div class="span3">
           <label>Title</label>
           <input name="title" placeholder="Aluminum sheet sourcing Q2" required />
