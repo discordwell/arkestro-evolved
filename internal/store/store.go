@@ -432,6 +432,48 @@ func (s *Store) CreateQuote(ctx context.Context, lineItemID, supplierID int64, r
 	return Quote{ID: id, LineItemID: lineItemID, SupplierID: supplierID, Round: round, UnitPriceCents: unitPriceCents, CreatedAt: createdAt}, nil
 }
 
+func (s *Store) UpsertQuote(ctx context.Context, lineItemID, supplierID int64, round int, unitPriceCents int64) (Quote, error) {
+	if round <= 0 {
+		round = 1
+	}
+	if unitPriceCents <= 0 {
+		return Quote{}, errors.New("unit price must be > 0")
+	}
+
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+
+	var (
+		existingID int64
+		createdRaw string
+	)
+	err := s.db.QueryRowContext(ctx, `
+SELECT id, created_at
+FROM quotes
+WHERE line_item_id = ? AND supplier_id = ? AND round = ?
+ORDER BY id DESC
+LIMIT 1
+`, lineItemID, supplierID, round).Scan(&existingID, &createdRaw)
+	if err == nil {
+		if _, err := s.db.ExecContext(ctx, `UPDATE quotes SET unit_price_cents = ?, created_at = ? WHERE id = ?`, unitPriceCents, now, existingID); err != nil {
+			return Quote{}, err
+		}
+		createdAt, _ := time.Parse(time.RFC3339Nano, now)
+		return Quote{
+			ID:             existingID,
+			LineItemID:     lineItemID,
+			SupplierID:     supplierID,
+			Round:          round,
+			UnitPriceCents: unitPriceCents,
+			CreatedAt:      createdAt,
+		}, nil
+	}
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return Quote{}, err
+	}
+
+	return s.CreateQuote(ctx, lineItemID, supplierID, round, unitPriceCents)
+}
+
 func (s *Store) ListQuotesByEvent(ctx context.Context, eventID int64) (map[int64][]Quote, error) {
 	rows, err := s.db.QueryContext(ctx, `
 SELECT q.id, q.line_item_id, q.supplier_id, q.round, q.unit_price_cents, q.created_at, s.name

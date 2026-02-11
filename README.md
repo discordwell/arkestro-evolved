@@ -8,7 +8,17 @@ It supports:
 - Line items (category + baseline + auto-predicted target price)
 - "Smart baselining" (leave baseline blank to model one)
 - Supplier quotes (manual or simulated)
-- Quote anomaly flags (simple heuristics)
+- Quote-feature extraction per quote:
+  - gap to target / walk-away
+  - round-over-round improvement slope
+  - supplier risk / performance
+  - quote volatility + outlier flags
+- Counter-or-Award copilot actions:
+  - `award_now`
+  - `counter_at_$X`
+  - `add_supplier`
+- Historical replay CSV import (for real past rounds)
+- Backtest view: compare modeled recommendation outcome vs actual outcome
 - Best-value award modeling (weights: cost vs risk vs performance)
 - One-click award to lowest quote per line item
 
@@ -35,6 +45,28 @@ Then open: `http://127.0.0.1:8080`
    - leave baseline blank to see modeled baselines
 4. Click `Simulate Supplier Round` to generate quotes quickly
 5. Tune `Best Value Weights` to see awards shift from "lowest price" toward "best value"
+6. Use `Import Historical Replay CSV` on an event to load past quote rounds and awards
+7. Review:
+   - `Negotiation Guidance` for the copilot decision per line item
+   - `Copilot Backtest` for modeled vs actual outcomes on imported rounds
+
+## Replay CSV
+
+Import from the event page (`/events/{id}`) with:
+- Required columns: `line_item`, `supplier`, `round`, `unit_price`
+- Optional columns: `category`, `quantity`, `unit`, `baseline`, `target`, `supplier_email`, `supplier_tags`, `supplier_risk`, `supplier_performance`, `award`
+
+Sample file:
+- `examples/replay_sample.csv`
+
+Example `award` values treated as true:
+- `yes`, `true`, `1`, `awarded`
+
+## API
+
+Event-scoped copilot endpoints:
+- `GET /api/events/{id}/copilot`
+- `GET /api/events/{id}/copilot/backtest`
 
 ## Build
 

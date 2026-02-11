@@ -1,0 +1,9 @@
+line_item,category,quantity,unit,baseline,supplier,supplier_tags,supplier_risk,supplier_performance,round,unit_price,award
+6061 Aluminum Sheet,"metals,aluminum",1000,kg,12.50,Acme Metals,"metals,aluminum",30,84,1,12.20,
+6061 Aluminum Sheet,"metals,aluminum",1000,kg,12.50,Bolt Industrial,"metals",45,77,1,12.40,
+6061 Aluminum Sheet,"metals,aluminum",1000,kg,12.50,Acme Metals,"metals,aluminum",30,84,2,11.80,yes
+6061 Aluminum Sheet,"metals,aluminum",1000,kg,12.50,Bolt Industrial,"metals",45,77,2,12.00,
+Freight Lane West,"logistics,freight",120,loads,720.00,Northstar Logistics,"logistics,freight",55,80,1,705.00,
+Freight Lane West,"logistics,freight",120,loads,720.00,Swiftline Freight,"logistics",40,73,1,714.00,
+Freight Lane West,"logistics,freight",120,loads,720.00,Northstar Logistics,"logistics,freight",55,80,2,692.00,awarded
+Freight Lane West,"logistics,freight",120,loads,720.00,Swiftline Freight,"logistics",40,73,2,700.00,

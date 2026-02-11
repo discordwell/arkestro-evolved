@@ -28,6 +28,16 @@
       </div>
     </div>
     {{if .Event.Description}}<div class="sub">{{.Event.Description}}</div>{{end}}
+    {{with .ImportResult}}
+      <div class="card">
+        <div class="row" style="justify-content: space-between">
+          <div><span class="badge ok">Replay Imported</span></div>
+          <div class="small">{{.Rows}} rows processed</div>
+        </div>
+        <div class="small">Suppliers created: {{.SuppliersCreated}} · Suppliers updated: {{.SuppliersUpdated}} · Line items created: {{.LineItemsCreated}} · Quotes upserted: {{.QuotesUpserted}} · Awards upserted: {{.AwardsUpserted}}</div>
+      </div>
+      <div style="height: 14px"></div>
+    {{end}}
 
     <div class="grid cols2">
       <div class="card">
@@ -120,7 +130,7 @@
       <div class="card">
         <div class="card-header">
           <h2>Add Line Item</h2>
-          <span class="small">Targets auto-predicted</span>
+          <span class="small">Targets auto-predicted + replay import</span>
         </div>
 
         <form class="form" method="post" action="/events/{{.Event.ID}}">
@@ -149,6 +159,21 @@
             <button class="btn" type="submit">Add Line Item</button>
           </div>
           <div class="span6 small">Prediction uses baseline + quantity + supplier competition. If baseline is blank, this demo will model a baseline price.</div>
+        </form>
+
+        <div style="height: 12px"></div>
+
+        <h3>Import Historical Replay CSV</h3>
+        <form class="form" method="post" action="/events/{{.Event.ID}}" enctype="multipart/form-data">
+          <input type="hidden" name="action" value="import_replay_csv" />
+          <div class="span6">
+            <label>CSV file</label>
+            <input type="file" name="replay_csv" accept=".csv,text/csv" required />
+          </div>
+          <div class="span6">
+            <button class="btn secondary" type="submit">Import Replay</button>
+          </div>
+          <div class="span6 small">Required columns: <code>line_item</code>, <code>supplier</code>, <code>round</code>, <code>unit_price</code>. Optional: <code>category</code>, <code>quantity</code>, <code>baseline</code>, <code>target</code>, <code>supplier_tags</code>, <code>supplier_risk</code>, <code>supplier_performance</code>, <code>award</code>.</div>
         </form>
       </div>
     </div>
@@ -234,6 +259,7 @@
             <th>Target</th>
             <th>Walk-away</th>
             <th>Confidence</th>
+            <th>Copilot Decision</th>
             <th>Recommended suppliers</th>
           </tr>
         </thead>
@@ -255,6 +281,23 @@
               <td class="small">-</td>
               <td class="small">-</td>
             {{end}}
+            <td class="small">
+              {{with (index $.CopilotByItem .ID)}}
+                {{if eq .Action "award_now"}}
+                  <span class="badge ok">award now</span>
+                {{else if eq .Action "counter_at"}}
+                  <span class="badge warn">counter at {{money .CounterAtCents}}</span>
+                {{else}}
+                  <span class="badge">add supplier</span>
+                {{end}}
+                <div class="small">confidence {{pct .Confidence}}</div>
+                {{with .ReasonCodes}}
+                  {{if gt (len .) 0}}<div class="small">{{index . 0}}</div>{{end}}
+                {{end}}
+              {{else}}
+                -
+              {{end}}
+            </td>
             <td class="small">
               {{range (index $.SupplierRecsByItem .ID)}}
                 <span class="badge">{{.Supplier.Name}}</span>
@@ -331,6 +374,11 @@
                   <th>Supplier</th>
                   <th>Round</th>
                   <th>Unit price</th>
+                  <th>Gap vs target</th>
+                  <th>Gap vs walk-away</th>
+                  <th>Slope</th>
+                  <th>Risk / Perf</th>
+                  <th>Volatility</th>
                   <th>Flags</th>
                   <th>Created</th>
                 </tr>
@@ -341,6 +389,41 @@
                   <td>{{.SupplierName}}</td>
                   <td class="small">{{.Round}}</td>
                   <td class="small">{{money .UnitPriceCents}}</td>
+                  <td class="small">
+                    {{with (index $.QuoteFeatureByID .ID)}}
+                      {{pct .GapToTarget}}
+                    {{else}}
+                      -
+                    {{end}}
+                  </td>
+                  <td class="small">
+                    {{with (index $.QuoteFeatureByID .ID)}}
+                      {{pct .GapToWalkAway}}
+                    {{else}}
+                      -
+                    {{end}}
+                  </td>
+                  <td class="small">
+                    {{with (index $.QuoteFeatureByID .ID)}}
+                      {{pct .ImprovementSlope}}
+                    {{else}}
+                      -
+                    {{end}}
+                  </td>
+                  <td class="small">
+                    {{with (index $.QuoteFeatureByID .ID)}}
+                      {{.SupplierRisk}} / {{.SupplierPerformance}}
+                    {{else}}
+                      -
+                    {{end}}
+                  </td>
+                  <td class="small">
+                    {{with (index $.QuoteFeatureByID .ID)}}
+                      {{pct .Volatility}}
+                    {{else}}
+                      -
+                    {{end}}
+                  </td>
                   <td class="small">
                     {{with (index $.QuoteFlagsByID .ID)}}
                       {{range .}}
@@ -363,6 +446,55 @@
         <div class="small">No quotes yet.</div>
       {{end}}
 
+    </div>
+
+    <div style="height: 14px"></div>
+
+    <div class="card">
+      <div class="card-header">
+        <h2>Copilot Backtest (Historical Replay)</h2>
+        <span class="small">Compare modeled recommendation vs actual outcome</span>
+      </div>
+
+      {{if .BacktestRows}}
+      <div class="small">Rows: {{.BacktestSummary.Rows}} · Expected: {{money .BacktestSummary.TotalExpectedCents}} · Actual: {{money .BacktestSummary.TotalActualOutcomeCents}} · Delta: {{money .BacktestSummary.TotalDeltaCents}}</div>
+      <div style="height: 10px"></div>
+      <table class="table">
+        <thead>
+          <tr>
+            <th>Line item</th>
+            <th>Decision round</th>
+            <th>Copilot action</th>
+            <th>Expected outcome</th>
+            <th>Actual outcome</th>
+            <th>Delta (actual - expected)</th>
+            <th>Confidence</th>
+          </tr>
+        </thead>
+        <tbody>
+          {{range .BacktestRows}}
+          <tr>
+            <td>{{.LineItemName}}</td>
+            <td class="small">{{.DecisionRound}}</td>
+            <td class="small">
+              {{if eq .Action "award_now"}}<span class="badge ok">award now</span>{{else if eq .Action "counter_at"}}<span class="badge warn">counter</span>{{else}}<span class="badge">add supplier</span>{{end}}
+            </td>
+            <td class="small">{{money .ExpectedCents}}</td>
+            <td class="small">{{money .ActualOutcomeCents}}</td>
+            <td class="small">
+              {{money .DeltaCents}}
+              {{if gt .DeltaCents 0}}<span class="badge ok">modeled upside</span>{{else if lt .DeltaCents 0}}<span class="badge danger">model miss</span>{{else}}<span class="badge">match</span>{{end}}
+            </td>
+            <td class="small">{{pct .Confidence}}</td>
+          </tr>
+          {{end}}
+        </tbody>
+      </table>
+      {{else}}
+      <div class="small">Backtest appears once a line item has at least 2 rounds of quotes (or imported replay rounds).</div>
+      {{end}}
+      <div style="height: 10px"></div>
+      <div class="small">JSON endpoints: <a href="/api/events/{{.Event.ID}}/copilot">/api/events/{{.Event.ID}}/copilot</a> and <a href="/api/events/{{.Event.ID}}/copilot/backtest">/api/events/{{.Event.ID}}/copilot/backtest</a></div>
     </div>
 
   </div>

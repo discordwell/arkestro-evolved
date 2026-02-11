@@ -1,6 +1,7 @@
 package httpui
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,11 +11,13 @@ import (
 	"log"
 	"math"
 	"net/http"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/discordwell/arkessro-evolved/internal/copilot"
 	"github.com/discordwell/arkessro-evolved/internal/predict"
 	"github.com/discordwell/arkessro-evolved/internal/store"
 	"github.com/discordwell/arkessro-evolved/web"
@@ -73,6 +76,7 @@ func (u *UI) Register(mux *http.ServeMux) {
 
 	mux.HandleFunc("GET /api/health", u.wrap(u.handleAPIHealth))
 	mux.HandleFunc("GET /api/events", u.wrap(u.handleAPIEvents))
+	mux.HandleFunc("GET /api/events/", u.wrap(u.handleAPIEventScoped))
 }
 
 type handler func(http.ResponseWriter, *http.Request) error
@@ -240,7 +244,6 @@ func (u *UI) handleEvent(w http.ResponseWriter, r *http.Request) error {
 
 	// Negotiation science: per-item offer guidance.
 	predByItem := make(map[int64]predict.Target, len(items))
-	itemByID := make(map[int64]store.LineItem, len(items))
 	for i := range items {
 		li := items[i]
 		// Smart baselining: if no baseline, model one so the rest of the demo works.
@@ -261,8 +264,6 @@ func (u *UI) handleEvent(w http.ResponseWriter, r *http.Request) error {
 			li.TargetCents = p.TargetCents
 			items[i] = li
 		}
-
-		itemByID[li.ID] = li
 	}
 
 	bestQuote := make(map[int64]store.Quote)
@@ -281,19 +282,6 @@ func (u *UI) handleEvent(w http.ResponseWriter, r *http.Request) error {
 		supplierRecsByItem[li.ID] = recommendSuppliers(li, suppliers)
 	}
 
-	// Process science: flag quote anomalies (missing fields, outliers, etc.).
-	quoteFlagsByID := make(map[int64][]QuoteFlag)
-	for liID, qs := range quotesByItem {
-		li, ok := itemByID[liID]
-		if !ok {
-			continue
-		}
-		p := predByItem[liID]
-		for _, q := range qs {
-			quoteFlagsByID[q.ID] = append(quoteFlagsByID[q.ID], quoteFlags(li, p, q)...)
-		}
-	}
-
 	// Best-value award modeling (cost vs risk vs performance).
 	bestValueByItem := make(map[int64]AwardRec)
 	for _, li := range items {
@@ -302,6 +290,8 @@ func (u *UI) handleEvent(w http.ResponseWriter, r *http.Request) error {
 			bestValueByItem[li.ID] = rec
 		}
 	}
+
+	copilotByItem, quoteFeatureByID, quoteFlagsByID, backtestRows, backtestSummary := u.buildCopilotData(items, suppliers, quotesByItem, awardsByItem, predByItem)
 
 	var (
 		totalBaseline int64
@@ -327,9 +317,27 @@ func (u *UI) handleEvent(w http.ResponseWriter, r *http.Request) error {
 		PredByItem         map[int64]predict.Target
 		SupplierRecsByItem map[int64][]SupplierRec
 		BestValueByItem    map[int64]AwardRec
+		CopilotByItem      map[int64]copilot.Decision
+		QuoteFeatureByID   map[int64]copilot.QuoteFeature
 		QuoteFlagsByID     map[int64][]QuoteFlag
+		BacktestRows       []BacktestRow
+		BacktestSummary    BacktestSummary
+		ImportResult       *ReplayImportResult
 		Weights            AwardWeights
 	}
+
+	var importResult *ReplayImportResult
+	if r.URL.Query().Get("imported") == "1" {
+		importResult = &ReplayImportResult{
+			Rows:             parseIntDefault(r.URL.Query().Get("rows"), 0),
+			SuppliersCreated: parseIntDefault(r.URL.Query().Get("suppliers_created"), 0),
+			SuppliersUpdated: parseIntDefault(r.URL.Query().Get("suppliers_updated"), 0),
+			LineItemsCreated: parseIntDefault(r.URL.Query().Get("line_items_created"), 0),
+			QuotesUpserted:   parseIntDefault(r.URL.Query().Get("quotes_upserted"), 0),
+			AwardsUpserted:   parseIntDefault(r.URL.Query().Get("awards_upserted"), 0),
+		}
+	}
+
 	return u.render(w, "event.html", vm{
 		Bust:               u.bust,
 		Event:              e,
@@ -343,7 +351,12 @@ func (u *UI) handleEvent(w http.ResponseWriter, r *http.Request) error {
 		PredByItem:         predByItem,
 		SupplierRecsByItem: supplierRecsByItem,
 		BestValueByItem:    bestValueByItem,
+		CopilotByItem:      copilotByItem,
+		QuoteFeatureByID:   quoteFeatureByID,
 		QuoteFlagsByID:     quoteFlagsByID,
+		BacktestRows:       backtestRows,
+		BacktestSummary:    backtestSummary,
+		ImportResult:       importResult,
 		Weights:            weights,
 	})
 }
@@ -404,6 +417,28 @@ func (u *UI) handleEventPost(w http.ResponseWriter, r *http.Request) error {
 		if _, err := u.st.CreateQuote(ctx, liID, supplierID, round, unitPriceCents); err != nil {
 			return err
 		}
+	case "import_replay_csv":
+		file, _, err := r.FormFile("replay_csv")
+		if err != nil {
+			return errors.New("replay_csv file is required")
+		}
+		defer file.Close()
+
+		result, err := u.importReplayCSV(ctx, id, file)
+		if err != nil {
+			return err
+		}
+
+		q := url.Values{}
+		q.Set("imported", "1")
+		q.Set("rows", strconv.Itoa(result.Rows))
+		q.Set("suppliers_created", strconv.Itoa(result.SuppliersCreated))
+		q.Set("suppliers_updated", strconv.Itoa(result.SuppliersUpdated))
+		q.Set("line_items_created", strconv.Itoa(result.LineItemsCreated))
+		q.Set("quotes_upserted", strconv.Itoa(result.QuotesUpserted))
+		q.Set("awards_upserted", strconv.Itoa(result.AwardsUpserted))
+		http.Redirect(w, r, fmt.Sprintf("/events/%d?%s", id, q.Encode()), http.StatusSeeOther)
+		return nil
 	case "simulate_round":
 		items, err := u.st.ListLineItemsByEvent(ctx, id)
 		if err != nil {
@@ -545,6 +580,119 @@ func (u *UI) handleAPIEvents(w http.ResponseWriter, r *http.Request) error {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	return json.NewEncoder(w).Encode(events)
+}
+
+func (u *UI) handleAPIEventScoped(w http.ResponseWriter, r *http.Request) error {
+	const prefix = "/api/events/"
+	if !strings.HasPrefix(r.URL.Path, prefix) {
+		return errors.New("bad path")
+	}
+	rest := strings.TrimPrefix(r.URL.Path, prefix)
+	rest = strings.TrimPrefix(rest, "/")
+	if rest == "" {
+		return errors.New("missing id")
+	}
+
+	parts := strings.SplitN(rest, "/", 2)
+	id, err := strconv.ParseInt(parts[0], 10, 64)
+	if err != nil || id <= 0 {
+		return errors.New("invalid id")
+	}
+	suffix := ""
+	if len(parts) == 2 {
+		suffix = "/" + strings.Trim(parts[1], "/")
+	}
+
+	switch suffix {
+	case "/copilot":
+		return u.handleAPIEventCopilot(w, r, id)
+	case "/copilot/backtest":
+		return u.handleAPIEventCopilotBacktest(w, r, id)
+	default:
+		return errors.New("unknown api route")
+	}
+}
+
+func (u *UI) handleAPIEventCopilot(w http.ResponseWriter, r *http.Request, eventID int64) error {
+	ctx := r.Context()
+	items, suppliers, quotesByItem, awardsByItem, predByItem, err := u.loadEventCopilotInputs(ctx, eventID)
+	if err != nil {
+		return err
+	}
+	decisionsByItem, featuresByQuoteID, _, _, _ := u.buildCopilotData(items, suppliers, quotesByItem, awardsByItem, predByItem)
+
+	type itemResp struct {
+		LineItemID   int64            `json:"line_item_id"`
+		LineItemName string           `json:"line_item_name"`
+		Decision     copilot.Decision `json:"decision"`
+		QuoteCount   int              `json:"quote_count"`
+	}
+	out := struct {
+		EventID  int64      `json:"event_id"`
+		Items    []itemResp `json:"items"`
+		Features int        `json:"feature_rows"`
+	}{
+		EventID:  eventID,
+		Items:    make([]itemResp, 0, len(items)),
+		Features: len(featuresByQuoteID),
+	}
+	for _, li := range items {
+		out.Items = append(out.Items, itemResp{
+			LineItemID:   li.ID,
+			LineItemName: li.Name,
+			Decision:     decisionsByItem[li.ID],
+			QuoteCount:   len(quotesByItem[li.ID]),
+		})
+	}
+	w.Header().Set("Content-Type", "application/json")
+	return json.NewEncoder(w).Encode(out)
+}
+
+func (u *UI) handleAPIEventCopilotBacktest(w http.ResponseWriter, r *http.Request, eventID int64) error {
+	ctx := r.Context()
+	items, suppliers, quotesByItem, awardsByItem, predByItem, err := u.loadEventCopilotInputs(ctx, eventID)
+	if err != nil {
+		return err
+	}
+	_, _, _, rows, summary := u.buildCopilotData(items, suppliers, quotesByItem, awardsByItem, predByItem)
+	w.Header().Set("Content-Type", "application/json")
+	return json.NewEncoder(w).Encode(map[string]any{
+		"event_id": eventID,
+		"summary":  summary,
+		"rows":     rows,
+	})
+}
+
+func (u *UI) loadEventCopilotInputs(
+	ctx context.Context,
+	eventID int64,
+) ([]store.LineItem, []store.Supplier, map[int64][]store.Quote, map[int64]store.Award, map[int64]predict.Target, error) {
+	items, err := u.st.ListLineItemsByEvent(ctx, eventID)
+	if err != nil {
+		return nil, nil, nil, nil, nil, err
+	}
+	suppliers, err := u.st.ListSuppliers(ctx)
+	if err != nil {
+		return nil, nil, nil, nil, nil, err
+	}
+	quotesByItem, err := u.st.ListQuotesByEvent(ctx, eventID)
+	if err != nil {
+		return nil, nil, nil, nil, nil, err
+	}
+	awardsByItem, err := u.st.ListAwardsByEvent(ctx, eventID)
+	if err != nil {
+		return nil, nil, nil, nil, nil, err
+	}
+
+	predByItem := make(map[int64]predict.Target, len(items))
+	for _, li := range items {
+		baseline := li.BaselineCents
+		if baseline == 0 {
+			baseline = u.pred.ModelBaseline(li.Name, li.Category, li.Quantity)
+		}
+		predByItem[li.ID] = u.pred.Predict(baseline, li.Quantity, len(suppliers))
+	}
+	return items, suppliers, quotesByItem, awardsByItem, predByItem, nil
 }
 
 func parseIDFromPath(pth, prefix string) (int64, error) {

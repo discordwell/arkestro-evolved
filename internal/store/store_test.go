@@ -47,6 +47,9 @@ func TestStoreCRUD(t *testing.T) {
 	if _, err := st.CreateQuote(ctx, li1.ID, s1.ID, 1, 1199); err != nil {
 		t.Fatalf("create quote: %v", err)
 	}
+	if _, err := st.UpsertQuote(ctx, li1.ID, s1.ID, 1, 1175); err != nil {
+		t.Fatalf("upsert quote: %v", err)
+	}
 
 	quotesByItem, err := st.ListQuotesByEvent(ctx, e1.ID)
 	if err != nil {
@@ -54,6 +57,9 @@ func TestStoreCRUD(t *testing.T) {
 	}
 	if got := len(quotesByItem[li1.ID]); got != 1 {
 		t.Fatalf("expected 1 quote, got %d", got)
+	}
+	if got := quotesByItem[li1.ID][0].UnitPriceCents; got != 1175 {
+		t.Fatalf("expected updated quote 1175, got %d", got)
 	}
 
 	if err := st.UpsertAward(ctx, li1.ID, s1.ID, 1199); err != nil {
