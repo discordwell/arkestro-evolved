@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Arkessro | Dashboard</title>
+  <link rel="stylesheet" href="/static/style.css?v={{.Bust}}" />
+</head>
+<body>
+  <div class="nav">
+    <div class="brand"><span class="brand-badge"></span> Arkessro <span class="badge">oneshot build</span></div>
+    <div class="nav-links">
+      <a href="/">Dashboard</a>
+      <a href="/events">Events</a>
+      <a href="/suppliers">Suppliers</a>
+      <a href="/api/health">API</a>
+    </div>
+  </div>
+
+  <div class="container">
+    <h1>Predictive Procurement, minimal.</h1>
+    <div class="sub">Create suppliers, create a sourcing event, add line items, collect quotes, then award the lowest. Targets are auto-predicted from baseline + quantity + competition.</div>
+
+    <div class="card">
+      <div class="card-header">
+        <h2>Today</h2>
+        <span class="small">Local demo, SQLite-backed</span>
+      </div>
+      <div class="kpi">
+        <div class="item">
+          <div class="num">{{len .Events}}</div>
+          <div class="label">Events</div>
+        </div>
+        <div class="item">
+          <div class="num">{{len .Suppliers}}</div>
+          <div class="label">Suppliers</div>
+        </div>
+      </div>
+      <div style="margin-top: 14px" class="row">
+        <a class="btn" href="/events/new">New Event</a>
+        <a class="btn secondary" href="/suppliers">Add Supplier</a>
+      </div>
+    </div>
+
+    <div style="height: 14px"></div>
+
+    <div class="grid cols2">
+      <div class="card">
+        <div class="card-header">
+          <h2>Recent Events</h2>
+          <a class="small" href="/events">See all</a>
+        </div>
+        {{if .Events}}
+          <table class="table">
+            <thead>
+              <tr>
+                <th>Title</th>
+                <th>Status</th>
+                <th>Created</th>
+              </tr>
+            </thead>
+            <tbody>
+              {{range $i, $e := .Events}}
+                {{if lt $i 8}}
+                <tr>
+                  <td><a href="/events/{{$e.ID}}">{{$e.Title}}</a></td>
+                  <td><span class="badge">{{$e.Status}}</span></td>
+                  <td class="small">{{since $e.CreatedAt}}</td>
+                </tr>
+                {{end}}
+              {{end}}
+            </tbody>
+          </table>
+        {{else}}
+          <div class="small">No events yet. Create one to start.</div>
+        {{end}}
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <h2>Suppliers</h2>
+          <a class="small" href="/suppliers">Manage</a>
+        </div>
+        {{if .Suppliers}}
+          <table class="table">
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Email</th>
+              </tr>
+            </thead>
+            <tbody>
+              {{range $i, $s := .Suppliers}}
+                {{if lt $i 8}}
+                <tr>
+                  <td>{{$s.Name}}</td>
+                  <td class="small">{{$s.Email}}</td>
+                </tr>
+                {{end}}
+              {{end}}
+            </tbody>
+          </table>
+        {{else}}
+          <div class="small">No suppliers yet. Add at least 2 to simulate competition.</div>
+        {{end}}
+      </div>
+    </div>
+
+    <div style="height: 20px"></div>
+    <div class="small">Tip: start at <a href="/suppliers">Suppliers</a>, then create an <a href="/events/new">Event</a>, then add line items and quotes.</div>
+  </div>
+</body>
+</html>

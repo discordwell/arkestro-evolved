@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Arkessro | Suppliers</title>
+  <link rel="stylesheet" href="/static/style.css?v={{.Bust}}" />
+</head>
+<body>
+  <div class="nav">
+    <div class="brand"><span class="brand-badge"></span> Arkessro</div>
+    <div class="nav-links">
+      <a href="/">Dashboard</a>
+      <a href="/events">Events</a>
+      <a href="/suppliers">Suppliers</a>
+    </div>
+  </div>
+
+  <div class="container">
+    <div class="row" style="justify-content: space-between">
+      <h1>Suppliers</h1>
+      <a class="btn secondary" href="/events/new">New Event</a>
+    </div>
+    <div class="sub">This demo treats suppliers as the competitive set for pricing predictions and quote collection.</div>
+
+    <div class="card">
+      <div class="card-header">
+        <h2>Add Supplier</h2>
+        <span class="small">Stored locally in SQLite</span>
+      </div>
+      <form class="form" method="post" action="/suppliers">
+        <div class="span3">
+          <label>Name</label>
+          <input name="name" placeholder="Acme Metals" required />
+        </div>
+        <div class="span3">
+          <label>Email (optional)</label>
+          <input name="email" placeholder="sourcing@acme.example" />
+        </div>
+        <div class="span3">
+          <label>Capability tags (comma-separated)</label>
+          <input name="tags" placeholder="metals, machining, logistics" />
+        </div>
+        <div class="span1">
+          <label>Risk (0-100)</label>
+          <input name="risk_score" placeholder="50" />
+        </div>
+        <div class="span2">
+          <label>Performance (0-100)</label>
+          <input name="performance_score" placeholder="75" />
+        </div>
+        <div class="span6">
+          <button class="btn" type="submit">Create Supplier</button>
+        </div>
+      </form>
+    </div>
+
+    <div style="height: 14px"></div>
+
+    <div class="card">
+      <div class="card-header">
+        <h2>All Suppliers</h2>
+        <span class="badge">{{len .Suppliers}}</span>
+      </div>
+
+      {{if .Suppliers}}
+      <table class="table">
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Name</th>
+            <th>Email</th>
+            <th>Tags</th>
+            <th>Risk</th>
+            <th>Perf</th>
+            <th>Update</th>
+          </tr>
+        </thead>
+        <tbody>
+          {{range .Suppliers}}
+          <tr>
+            <td class="small">{{.ID}}</td>
+            <td>{{.Name}}</td>
+            <td class="small">{{.Email}}</td>
+            <td>
+              <form id="sup{{.ID}}" method="post" action="/suppliers/{{.ID}}">
+                <input type="hidden" name="action" value="update_profile" />
+              </form>
+              <input form="sup{{.ID}}" name="tags" value="{{.Tags}}" placeholder="metals, machining" />
+            </td>
+            <td><input form="sup{{.ID}}" name="risk_score" value="{{.RiskScore}}" placeholder="50" /></td>
+            <td><input form="sup{{.ID}}" name="performance_score" value="{{.PerformanceScore}}" placeholder="75" /></td>
+            <td class="small">
+              <button form="sup{{.ID}}" class="btn secondary" type="submit">Save</button>
+              <div style="height: 6px"></div>
+              <span class="small">Created {{since .CreatedAt}}</span>
+            </td>
+          </tr>
+          {{end}}
+        </tbody>
+      </table>
+      {{else}}
+      <div class="small">No suppliers yet.</div>
+      {{end}}
+    </div>
+  </div>
+</body>
+</html>

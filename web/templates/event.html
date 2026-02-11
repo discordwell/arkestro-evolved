@@ -1,0 +1,370 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Arkessro | Event</title>
+  <link rel="stylesheet" href="/static/style.css?v={{.Bust}}" />
+</head>
+<body>
+  <div class="nav">
+    <div class="brand"><span class="brand-badge"></span> Arkessro</div>
+    <div class="nav-links">
+      <a href="/">Dashboard</a>
+      <a href="/events">Events</a>
+      <a href="/suppliers">Suppliers</a>
+    </div>
+  </div>
+
+  <div class="container">
+    <div class="row" style="justify-content: space-between">
+      <div>
+        <h1>{{.Event.Title}}</h1>
+        <div class="small">Event #{{.Event.ID}} · Created {{since .Event.CreatedAt}}</div>
+      </div>
+      <div class="row">
+        <span class="badge">status: {{.Event.Status}}</span>
+        <a class="btn secondary" href="/events">Back</a>
+      </div>
+    </div>
+    {{if .Event.Description}}<div class="sub">{{.Event.Description}}</div>{{end}}
+
+    <div class="grid cols2">
+      <div class="card">
+        <div class="card-header">
+          <h2>Controls</h2>
+          <span class="small">Workflow + award</span>
+        </div>
+
+        <form class="form" method="post" action="/events/{{.Event.ID}}">
+          <input type="hidden" name="action" value="set_status" />
+          <div class="span3">
+            <label>Status</label>
+            <select name="status">
+              <option value="draft">draft</option>
+              <option value="active">active</option>
+              <option value="awarded">awarded</option>
+            </select>
+          </div>
+          <div class="span3">
+            <button class="btn secondary" type="submit">Update Status</button>
+          </div>
+        </form>
+
+        <div style="height: 10px"></div>
+
+        <form method="post" action="/events/{{.Event.ID}}">
+          <input type="hidden" name="action" value="award_lowest" />
+          <button class="btn secondary" type="submit">Award Lowest Quote (each line item)</button>
+        </form>
+
+        <div style="height: 10px"></div>
+
+        <form method="post" action="/events/{{.Event.ID}}">
+          <input type="hidden" name="action" value="award_best_value" />
+          <input type="hidden" name="w_cost" value="{{.Weights.Cost}}" />
+          <input type="hidden" name="w_risk" value="{{.Weights.Risk}}" />
+          <input type="hidden" name="w_perf" value="{{.Weights.Performance}}" />
+          <button class="btn" type="submit">Award Best Value (weighted)</button>
+        </form>
+        <div class="small">Uses the current weight settings below.</div>
+
+        <div style="height: 10px"></div>
+
+        <form method="post" action="/events/{{.Event.ID}}">
+          <input type="hidden" name="action" value="simulate_round" />
+          <button class="btn secondary" type="submit">Simulate Supplier Round</button>
+        </form>
+        <div class="small">Generates one quote per supplier per line item for the next round.</div>
+
+        <div style="height: 10px"></div>
+
+        <div class="kpi">
+          <div class="item">
+            <div class="num">{{money .TotalBaselineCents}}</div>
+            <div class="label">Baseline total</div>
+          </div>
+          <div class="item">
+            <div class="num">{{money .TotalAwardedCents}}</div>
+            <div class="label">Awarded total</div>
+          </div>
+          <div class="item">
+            <div class="num">{{money (sub .TotalBaselineCents .TotalAwardedCents)}}</div>
+            <div class="label">Estimated savings</div>
+          </div>
+        </div>
+
+        <div style="height: 12px"></div>
+
+        <h3>Best Value Weights</h3>
+        <form class="form" method="get" action="/events/{{.Event.ID}}">
+          <div class="span2">
+            <label>Cost</label>
+            <input name="w_cost" value="{{.Weights.Cost}}" />
+          </div>
+          <div class="span2">
+            <label>Risk</label>
+            <input name="w_risk" value="{{.Weights.Risk}}" />
+          </div>
+          <div class="span2">
+            <label>Performance</label>
+            <input name="w_perf" value="{{.Weights.Performance}}" />
+          </div>
+          <div class="span6">
+            <button class="btn secondary" type="submit">Recompute Best Value</button>
+          </div>
+        </form>
+        <div class="small">Weights normalize to 100%. Risk is inverted (lower risk scores higher).</div>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <h2>Add Line Item</h2>
+          <span class="small">Targets auto-predicted</span>
+        </div>
+
+        <form class="form" method="post" action="/events/{{.Event.ID}}">
+          <input type="hidden" name="action" value="add_line_item" />
+          <div class="span3">
+            <label>Name</label>
+            <input name="name" placeholder="6061 aluminum sheet" required />
+          </div>
+          <div class="span3">
+            <label>Category (comma-separated)</label>
+            <input name="category" placeholder="metals, aluminum" />
+          </div>
+          <div class="span2">
+            <label>Quantity</label>
+            <input name="quantity" placeholder="1000" required />
+          </div>
+          <div class="span1">
+            <label>Unit</label>
+            <input name="unit" placeholder="kg" />
+          </div>
+          <div class="span3">
+            <label>Baseline unit price (USD, blank = model)</label>
+            <input name="baseline" placeholder="$12.50" />
+          </div>
+          <div class="span6">
+            <button class="btn" type="submit">Add Line Item</button>
+          </div>
+          <div class="span6 small">Prediction uses baseline + quantity + supplier competition. If baseline is blank, this demo will model a baseline price.</div>
+        </form>
+      </div>
+    </div>
+
+    <div style="height: 14px"></div>
+
+    <div class="card">
+      <div class="card-header">
+        <h2>Line Items</h2>
+        <span class="badge">{{len .Items}}</span>
+      </div>
+
+      {{if .Items}}
+      <table class="table">
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>Category</th>
+            <th>Qty</th>
+            <th>Baseline</th>
+            <th>Target</th>
+            <th>Best Value</th>
+            <th>Best Quote</th>
+            <th>Award</th>
+          </tr>
+        </thead>
+        <tbody>
+          {{range .Items}}
+          <tr>
+            <td>{{.Name}}</td>
+            <td class="small">{{.Category}}</td>
+            <td class="small">{{printf "%.2f" .Quantity}} {{.Unit}}</td>
+            <td class="small">
+              {{money .BaselineCents}}
+              {{if eq .BaselineSource "modeled"}} <span class="badge warn">modeled</span>{{else}} <span class="badge">manual</span>{{end}}
+            </td>
+            <td class="small">{{money .TargetCents}}</td>
+            <td class="small">
+              {{with (index $.BestValueByItem .ID)}}
+                {{money .UnitPriceCents}} <span class="badge">{{.SupplierName}}</span>
+                <div class="small">score {{pct .Score}}</div>
+              {{else}}
+                -
+              {{end}}
+            </td>
+            <td class="small">
+              {{with (index $.BestQuote .ID)}}
+                {{money .UnitPriceCents}} <span class="badge">{{.SupplierName}}</span>
+              {{else}}
+                -
+              {{end}}
+            </td>
+            <td class="small">
+              {{with (index $.AwardsByItem .ID)}}
+                {{money .UnitPriceCents}} <span class="badge ok">{{.SupplierName}}</span>
+              {{else}}
+                -
+              {{end}}
+            </td>
+          </tr>
+          {{end}}
+        </tbody>
+      </table>
+      {{else}}
+      <div class="small">No line items yet.</div>
+      {{end}}
+    </div>
+
+    <div style="height: 14px"></div>
+
+    <div class="card">
+      <div class="card-header">
+        <h2>Negotiation Guidance</h2>
+        <span class="small">Offers + supplier recommendations</span>
+      </div>
+
+      {{if .Items}}
+      <table class="table">
+        <thead>
+          <tr>
+            <th>Line item</th>
+            <th>First offer</th>
+            <th>Target</th>
+            <th>Walk-away</th>
+            <th>Confidence</th>
+            <th>Recommended suppliers</th>
+          </tr>
+        </thead>
+        <tbody>
+          {{range .Items}}
+          <tr>
+            <td>
+              {{.Name}}
+              {{if .Category}}<div class="small">{{.Category}}</div>{{end}}
+            </td>
+            {{with (index $.PredByItem .ID)}}
+              <td class="small">{{money .FirstOfferCents}}</td>
+              <td class="small">{{money .TargetCents}} <span class="badge">{{pct .DiscountFraction}} off</span></td>
+              <td class="small">{{money .WalkAwayCents}}</td>
+              <td class="small">{{pct .Confidence}}</td>
+            {{else}}
+              <td class="small">-</td>
+              <td class="small">-</td>
+              <td class="small">-</td>
+              <td class="small">-</td>
+            {{end}}
+            <td class="small">
+              {{range (index $.SupplierRecsByItem .ID)}}
+                <span class="badge">{{.Supplier.Name}}</span>
+              {{end}}
+            </td>
+          </tr>
+          {{end}}
+        </tbody>
+      </table>
+      <div style="height: 10px"></div>
+      <div class="small">Supplier recommendations are scored from tag match + performance + inverse risk.</div>
+      {{else}}
+      <div class="small">No line items yet.</div>
+      {{end}}
+    </div>
+
+    <div style="height: 14px"></div>
+
+    <div class="card">
+      <div class="card-header">
+        <h2>Add Quote</h2>
+        <span class="small">Attach supplier quotes to a line item</span>
+      </div>
+
+      {{if and .Items .Suppliers}}
+      <form class="form" method="post" action="/events/{{.Event.ID}}">
+        <input type="hidden" name="action" value="add_quote" />
+        <div class="span3">
+          <label>Line item</label>
+          <select name="line_item_id">
+            {{range .Items}}
+              <option value="{{.ID}}">#{{.ID}} · {{.Name}}</option>
+            {{end}}
+          </select>
+        </div>
+        <div class="span3">
+          <label>Supplier</label>
+          <select name="supplier_id">
+            {{range .Suppliers}}
+              <option value="{{.ID}}">{{.Name}}</option>
+            {{end}}
+          </select>
+        </div>
+        <div class="span2">
+          <label>Round</label>
+          <input name="round" placeholder="1" />
+        </div>
+        <div class="span2">
+          <label>Unit price</label>
+          <input name="unit_price" placeholder="$11.95" required />
+        </div>
+        <div class="span6">
+          <button class="btn" type="submit">Add Quote</button>
+        </div>
+      </form>
+      {{else}}
+        <div class="small">Add at least 1 supplier and 1 line item to record quotes.</div>
+      {{end}}
+
+      <div style="height: 12px"></div>
+
+      <h3>Quotes</h3>
+      {{if .QuotesByItem}}
+        {{range .Items}}
+          <div style="height: 10px"></div>
+          <div class="row" style="justify-content: space-between">
+            <div><span class="badge">Line item #{{.ID}}</span> {{.Name}}</div>
+            <div class="small">Target: {{money .TargetCents}} · Baseline: {{money .BaselineCents}}</div>
+          </div>
+          {{with (index $.QuotesByItem .ID)}}
+            <table class="table">
+              <thead>
+                <tr>
+                  <th>Supplier</th>
+                  <th>Round</th>
+                  <th>Unit price</th>
+                  <th>Flags</th>
+                  <th>Created</th>
+                </tr>
+              </thead>
+              <tbody>
+                {{range .}}
+                <tr>
+                  <td>{{.SupplierName}}</td>
+                  <td class="small">{{.Round}}</td>
+                  <td class="small">{{money .UnitPriceCents}}</td>
+                  <td class="small">
+                    {{with (index $.QuoteFlagsByID .ID)}}
+                      {{range .}}
+                        <span class="badge {{.Class}}">{{.Text}}</span>
+                      {{end}}
+                    {{else}}
+                      -
+                    {{end}}
+                  </td>
+                  <td class="small">{{since .CreatedAt}}</td>
+                </tr>
+                {{end}}
+              </tbody>
+            </table>
+          {{else}}
+            <div class="small">No quotes yet for this line item.</div>
+          {{end}}
+        {{end}}
+      {{else}}
+        <div class="small">No quotes yet.</div>
+      {{end}}
+
+    </div>
+
+  </div>
+</body>
+</html>

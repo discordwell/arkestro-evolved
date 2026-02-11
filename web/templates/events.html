@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Arkessro | Events</title>
+  <link rel="stylesheet" href="/static/style.css?v={{.Bust}}" />
+</head>
+<body>
+  <div class="nav">
+    <div class="brand"><span class="brand-badge"></span> Arkessro</div>
+    <div class="nav-links">
+      <a href="/">Dashboard</a>
+      <a href="/events">Events</a>
+      <a href="/suppliers">Suppliers</a>
+    </div>
+  </div>
+
+  <div class="container">
+    <div class="row" style="justify-content: space-between">
+      <h1>Events</h1>
+      <a class="btn" href="/events/new">New Event</a>
+    </div>
+    <div class="sub">A sourcing event groups line items, quotes, and awards.</div>
+
+    <div class="card">
+      <div class="card-header">
+        <h2>All Events</h2>
+        <span class="badge">{{len .Events}}</span>
+      </div>
+
+      {{if .Events}}
+      <table class="table">
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Title</th>
+            <th>Status</th>
+            <th>Created</th>
+          </tr>
+        </thead>
+        <tbody>
+          {{range .Events}}
+          <tr>
+            <td class="small">{{.ID}}</td>
+            <td><a href="/events/{{.ID}}">{{.Title}}</a></td>
+            <td><span class="badge">{{.Status}}</span></td>
+            <td class="small">{{since .CreatedAt}}</td>
+          </tr>
+          {{end}}
+        </tbody>
+      </table>
+      {{else}}
+      <div class="small">No events yet.</div>
+      {{end}}
+    </div>
+  </div>
+</body>
+</html>
