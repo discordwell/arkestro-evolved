@@ -15,3 +15,7 @@
 .DS_Store
 .vscode/
 .idea/
+
+# local agent guidance
+/AGENTS.md
+/CLAUDE.md
