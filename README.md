@@ -1,4 +1,4 @@
-# Arkessro (oneshot build)
+# Evochain (oneshot build)
 
 This repo is a clean-room, minimal "predictive procurement" demo app inspired by Arkestro's public product positioning.
 
@@ -75,10 +75,10 @@ make build
 ./arkessro -db ./data/dev.db -addr 127.0.0.1:8080
 ```
 
-Optional subpath hosting (e.g. behind reverse proxy at `/cheapchain`):
+Optional subpath hosting (e.g. behind reverse proxy at `/evochain`):
 
 ```bash
-./arkessro -db ./data/dev.db -addr 127.0.0.1:8080 -base-path /cheapchain
+./arkessro -db ./data/dev.db -addr 127.0.0.1:8080 -base-path /evochain
 ```
 
 ## Test

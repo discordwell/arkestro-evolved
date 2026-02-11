@@ -19,7 +19,7 @@ func main() {
 		addr     = flag.String("addr", "127.0.0.1:8080", "listen address")
 		db       = flag.String("db", "./data/dev.db", "sqlite db path")
 		rseed    = flag.Int64("seed", 0, "prediction seed (0 = deterministic)")
-		basePath = flag.String("base-path", "", "optional URL base path, e.g. /cheapchain")
+		basePath = flag.String("base-path", "", "optional URL base path, e.g. /evochain")
 	)
 	flag.Parse()
 

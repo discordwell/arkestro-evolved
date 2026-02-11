@@ -39,8 +39,8 @@ func TestAppServesDashboardAndSuppliers(t *testing.T) {
 	if resp.StatusCode != 200 {
 		t.Fatalf("expected 200, got %d", resp.StatusCode)
 	}
-	if !strings.Contains(string(b), "Arkessro") {
-		t.Fatalf("expected Arkessro in body")
+	if !strings.Contains(string(b), "Evochain") {
+		t.Fatalf("expected Evochain in body")
 	}
 
 	form := url.Values{}
