@@ -1,0 +1,13 @@
+{
+  "name": "evo-control-plane",
+  "private": true,
+  "version": "0.1.0",
+  "packageManager": "pnpm@10.28.2",
+  "scripts": {
+    "build": "pnpm -r build",
+    "dev": "pnpm --parallel --filter @evo/console --filter @evo/mcp --filter @evo/chatgpt-app dev",
+    "lint": "pnpm -r lint",
+    "test": "pnpm --filter @evo/sdk build && pnpm -r test",
+    "typecheck": "pnpm -r typecheck"
+  }
+}

@@ -1,21 +1,18 @@
-# binaries
-/arkessro
-/bin/
-
-# local data
-/data/
-*.db
-*.db-journal
-*.sqlite
-
-# go
-*.test
-
-# editors
+node_modules/
+.pnpm-store/
+dist/
+build/
+coverage/
+.next/
+.vite/
+*.log
+.env
+.env.*
+!.env.example
+tmp/
 .DS_Store
-.vscode/
-.idea/
+bin/
+services/controlplane/tmp/
+services/controlplane/data/
+services/controlplane/testdata/runtime/
 
-# local agent guidance
-/AGENTS.md
-/CLAUDE.md

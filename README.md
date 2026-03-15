@@ -1,92 +1,136 @@
-# Evochain (oneshot build)
+# Evo Control Plane
 
-This repo is a clean-room, minimal "predictive procurement" demo app inspired by Arkestro's public product positioning.
+Evo Control Plane is an AI-native SaaS operations platform built for agents first.
 
-It supports:
-- Suppliers (with basic profiles: capability tags, risk, performance)
-- Sourcing events
-- Line items (category + baseline + auto-predicted target price)
-- "Smart baselining" (leave baseline blank to model one)
-- Supplier quotes (manual or simulated)
-- Quote-feature extraction per quote:
-  - gap to target / walk-away
-  - round-over-round improvement slope
-  - supplier risk / performance
-  - quote volatility + outlier flags
-- Counter-or-Award copilot actions:
-  - `award_now`
-  - `counter_at_$X`
-  - `add_supplier`
-- Historical replay CSV import (for real past rounds)
-- Backtest view: compare modeled recommendation outcome vs actual outcome
-- Best-value award modeling (weights: cost vs risk vs performance)
-- One-click award to lowest quote per line item
+It is designed to be operated from:
 
-## Requirements
-- Go (tested with `go1.25.x`)
+- Codex
+- Claude Code
+- OpenClaw-compatible skill/plugin flows
+- ChatGPT Apps
+- a structured CLI and web console
 
-## Quickstart
+The current repository is a monorepo with:
 
-```bash
-make dev
-```
+- `services/controlplane`: Go API and worker
+- `packages/sdk`: shared TypeScript SDK
+- `packages/cli`: `evo` CLI
+- `packages/mcp`: MCP server
+- `apps/console`: React control tower
+- `apps/chatgpt-app`: ChatGPT/App SDK host
+- `catalog`: runbook catalog shared across surfaces
+- `docs`: human and agent-facing docs
+- `legacy/arkessro-demo`: archived procurement demo
 
-Then open: `http://127.0.0.1:8080`
+## Core concepts
 
-## Demo Flow
+- `workspace`
+- `environment`
+- `tool_connection`
+- `runbook`
+- `task_template`
+- `task_run`
+- `artifact`
+- `approval_request`
+- `policy_rule`
+- `audit_event`
 
-1. Add a few suppliers on `/suppliers` and set:
-   - capability tags (comma-separated)
-   - risk score (0-100)
-   - performance score (0-100)
-2. Create an event on `/events/new`
-3. Add line items:
-   - set a category like `metals, aluminum` so supplier recommendations can match
-   - leave baseline blank to see modeled baselines
-4. Click `Simulate Supplier Round` to generate quotes quickly
-5. Tune `Best Value Weights` to see awards shift from "lowest price" toward "best value"
-6. Use `Import Historical Replay CSV` on an event to load past quote rounds and awards
-7. Review:
-   - `Negotiation Guidance` for the copilot decision per line item
-   - `Copilot Backtest` for modeled vs actual outcomes on imported rounds
+## Local development
 
-## Replay CSV
-
-Import from the event page (`/events/{id}`) with:
-- Required columns: `line_item`, `supplier`, `round`, `unit_price`
-- Optional columns: `category`, `quantity`, `unit`, `baseline`, `target`, `supplier_email`, `supplier_tags`, `supplier_risk`, `supplier_performance`, `award`
-
-Sample file:
-- `examples/replay_sample.csv`
-
-Example `award` values treated as true:
-- `yes`, `true`, `1`, `awarded`
-
-## API
-
-Event-scoped copilot endpoints:
-- `GET /api/events/{id}/copilot`
-- `GET /api/events/{id}/copilot/backtest`
-
-## Build
+Install dependencies:
 
 ```bash
-make build
-./arkessro -db ./data/dev.db -addr 127.0.0.1:8080
+pnpm install
 ```
 
-Optional subpath hosting (e.g. behind reverse proxy at `/evochain`):
+Start infra:
 
 ```bash
-./arkessro -db ./data/dev.db -addr 127.0.0.1:8080 -base-path /evochain
+docker compose up -d postgres
 ```
 
-## Test
+Or run the services individually:
+
+```bash
+make api
+```
+
+Run the Go worker:
+
+```bash
+make worker
+```
+
+Run the console:
+
+```bash
+make console
+```
+
+Run the MCP server:
+
+```bash
+make mcp
+```
+
+Run the remote MCP HTTP surface:
+
+```bash
+make mcp-http
+```
+
+Run the ChatGPT app host:
+
+```bash
+make chatgpt
+```
+
+## Auth and bootstrap access
+
+The API now requires bearer auth for all `/v1/*` routes except `POST /v1/auth/login`.
+
+Default local bootstrap credentials:
+
+- email: `admin@evo.local`
+- password: `changeme`
+
+Login with the CLI and persist a local token:
+
+```bash
+node packages/cli/dist/index.js auth login \
+  --email admin@evo.local \
+  --password changeme
+```
+
+Check the current identity:
+
+```bash
+node packages/cli/dist/index.js auth whoami --json
+```
+
+Print local MCP connection metadata:
+
+```bash
+node packages/cli/dist/index.js mcp print-config --json
+```
+
+For smoke tests, prefer the isolated script instead of writing auth state into your normal config directory:
+
+```bash
+make smoke-cli
+```
+
+That script uses a temporary `XDG_CONFIG_HOME` and deletes the local token on exit.
+
+## Remote agent surfaces
+
+- Remote MCP HTTP listens on `http://127.0.0.1:3301/mcp` by default.
+- The ChatGPT companion host listens on `http://127.0.0.1:3200` by default.
+- The companion advertises MCP connection metadata at `GET /api/connect`.
+- Both remote surfaces accept `Authorization: Bearer <token>` and target the same control-plane API.
+
+## Tests
 
 ```bash
 make test
 ```
-
-## Notes
-- Data is stored in `./data/dev.db` by default.
-- This is intentionally small and local-first, suitable for a fast "oneshot build" exercise.

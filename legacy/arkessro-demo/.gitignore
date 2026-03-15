@@ -1,0 +1,21 @@
+# binaries
+/arkessro
+/bin/
+
+# local data
+/data/
+*.db
+*.db-journal
+*.sqlite
+
+# go
+*.test
+
+# editors
+.DS_Store
+.vscode/
+.idea/
+
+# local agent guidance
+/AGENTS.md
+/CLAUDE.md

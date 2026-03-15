@@ -1,0 +1,23 @@
+{
+  "name": "@evo/sdk",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "generate": "openapi-typescript ../../openapi/controlplane.openapi.yaml -o src/generated/controlplane.ts",
+    "build": "pnpm run generate && tsc -p tsconfig.json",
+    "lint": "tsc --noEmit -p tsconfig.json",
+    "test": "node --test --import tsx src/**/*.test.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "devDependencies": {
+    "@types/node": "^24.5.0",
+    "openapi-typescript": "^7.13.0",
+    "tsx": "^4.20.5",
+    "typescript": "^5.9.2"
+  },
+  "dependencies": {
+    "openapi-fetch": "^0.17.0"
+  }
+}

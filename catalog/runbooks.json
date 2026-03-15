@@ -1,0 +1,75 @@
+{
+  "version": 1,
+  "runbooks": [
+    {
+      "slug": "release-coordination",
+      "title": "Release Coordination",
+      "family": "release",
+      "description": "Prepare release notes, verify staging context, request approval for rollout, and record deployment outputs.",
+      "tool_connections": ["deploy", "observability", "repo"],
+      "approval_required": true,
+      "expected_artifacts": ["release-note", "risk-report", "deployment-summary"],
+      "failure_modes": ["staging-check-failed", "approval-rejected", "deployment-failed"],
+      "rollback_notes": "Create a rollback summary artifact and stop further execution.",
+      "steps": [
+        {"slug": "collect-context", "kind": "read"},
+        {"slug": "draft-release-notes", "kind": "artifact"},
+        {"slug": "request-rollout-approval", "kind": "approval"},
+        {"slug": "execute-rollout", "kind": "write"},
+        {"slug": "publish-summary", "kind": "artifact"}
+      ]
+    },
+    {
+      "slug": "incident-response",
+      "title": "Incident Response",
+      "family": "incident",
+      "description": "Gather diagnostics, summarize impact, request intervention approval when needed, and preserve an incident pack.",
+      "tool_connections": ["observability", "repo", "statuspage"],
+      "approval_required": true,
+      "expected_artifacts": ["incident-timeline", "impact-summary", "resolution-summary"],
+      "failure_modes": ["tool-unavailable", "approval-rejected", "mitigation-failed"],
+      "rollback_notes": "Keep the run open and generate a follow-up artifact if mitigation fails.",
+      "steps": [
+        {"slug": "gather-signals", "kind": "read"},
+        {"slug": "draft-incident-pack", "kind": "artifact"},
+        {"slug": "request-mitigation-approval", "kind": "approval"},
+        {"slug": "execute-mitigation", "kind": "write"},
+        {"slug": "record-resolution", "kind": "artifact"}
+      ]
+    },
+    {
+      "slug": "support-triage",
+      "title": "Support Triage",
+      "family": "support",
+      "description": "Classify customer issues, gather system context, request approval for outbound changes, and store the triage pack.",
+      "tool_connections": ["support", "product", "observability"],
+      "approval_required": true,
+      "expected_artifacts": ["triage-summary", "customer-brief", "resolution-draft"],
+      "failure_modes": ["customer-not-found", "approval-rejected", "ticket-update-failed"],
+      "rollback_notes": "Leave the ticket untouched and attach a draft response artifact on rejection.",
+      "steps": [
+        {"slug": "collect-ticket-context", "kind": "read"},
+        {"slug": "draft-triage-summary", "kind": "artifact"},
+        {"slug": "request-ticket-action-approval", "kind": "approval"},
+        {"slug": "execute-ticket-action", "kind": "write"},
+        {"slug": "publish-resolution-draft", "kind": "artifact"}
+      ]
+    },
+    {
+      "slug": "compliance-pack",
+      "title": "Compliance Pack",
+      "family": "reporting",
+      "description": "Gather audit evidence, build a compliance packet, and publish a final report artifact.",
+      "tool_connections": ["repo", "billing", "identity"],
+      "approval_required": false,
+      "expected_artifacts": ["evidence-pack", "audit-report"],
+      "failure_modes": ["evidence-missing", "report-generation-failed"],
+      "rollback_notes": "Persist a missing-evidence report and mark the run failed.",
+      "steps": [
+        {"slug": "collect-evidence", "kind": "read"},
+        {"slug": "draft-evidence-pack", "kind": "artifact"},
+        {"slug": "publish-report", "kind": "artifact"}
+      ]
+    }
+  ]
+}

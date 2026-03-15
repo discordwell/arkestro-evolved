@@ -1,8 +1,8 @@
-/.git
-/.gitignore
-/arkessro
-/data
-/tmp
-*.db
-*.sqlite
-*.sqlite3
+.git
+node_modules
+dist
+build
+coverage
+tmp
+.pnpm-store
+

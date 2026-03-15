@@ -1,24 +1,40 @@
 SHELL := /bin/bash
 
-BINARY := arkessro
+.PHONY: api
+api:
+	go run ./services/controlplane/cmd/api
 
-.PHONY: dev
+.PHONY: worker
+worker:
+	go run ./services/controlplane/cmd/worker
 
-dev:
-	@mkdir -p data
-	@go run ./cmd/arkessro -db ./data/dev.db -addr 127.0.0.1:8080
+.PHONY: console
+console:
+	pnpm --filter @evo/console dev
+
+.PHONY: mcp
+mcp:
+	pnpm --filter @evo/mcp dev
+
+.PHONY: mcp-http
+mcp-http:
+	pnpm --filter @evo/mcp dev:http
+
+.PHONY: chatgpt
+chatgpt:
+	pnpm --filter @evo/chatgpt-app dev
 
 .PHONY: test
+test: test-go test-ts
 
-test:
-	@go test ./...
+.PHONY: test-go
+test-go:
+	go test ./services/controlplane/...
 
-.PHONY: build
+.PHONY: test-ts
+test-ts:
+	pnpm test
 
-build:
-	@go build -o $(BINARY) ./cmd/arkessro
-
-.PHONY: fmt
-
-fmt:
-	@go fmt ./...
+.PHONY: smoke-cli
+smoke-cli:
+	bash scripts/smoke-controlplane.sh

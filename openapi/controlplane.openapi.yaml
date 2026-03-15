@@ -1,0 +1,821 @@
+openapi: 3.1.0
+info:
+  title: Evo Control Plane API
+  version: 0.2.0
+servers:
+  - url: http://127.0.0.1:8080
+security:
+  - bearerAuth: []
+paths:
+  /api/health:
+    get:
+      operationId: health
+      security: []
+      responses:
+        "200":
+          description: Health response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+  /v1/auth/login:
+    post:
+      operationId: login
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginRequest"
+      responses:
+        "200":
+          description: Authenticated session
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthSessionEnvelope"
+        "401":
+          $ref: "#/components/responses/ErrorResponse"
+  /v1/auth/me:
+    get:
+      operationId: me
+      responses:
+        "200":
+          description: Current auth identity
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthIdentityEnvelope"
+        "401":
+          $ref: "#/components/responses/ErrorResponse"
+  /v1/auth/tokens:
+    post:
+      operationId: createToken
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateTokenRequest"
+      responses:
+        "201":
+          description: Created API token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthSessionEnvelope"
+        "401":
+          $ref: "#/components/responses/ErrorResponse"
+  /v1/workspaces:
+    get:
+      operationId: listWorkspaces
+      responses:
+        "200":
+          description: Workspace list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkspaceListResponse"
+    post:
+      operationId: createWorkspace
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateWorkspaceRequest"
+      responses:
+        "201":
+          description: Created workspace
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkspaceEnvelope"
+  /v1/environments:
+    get:
+      operationId: listEnvironments
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceIDQuery"
+      responses:
+        "200":
+          description: Environment list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnvironmentListResponse"
+    post:
+      operationId: createEnvironment
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateEnvironmentRequest"
+      responses:
+        "201":
+          description: Created environment
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnvironmentEnvelope"
+  /v1/tool-connections:
+    get:
+      operationId: listToolConnections
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceIDQuery"
+      responses:
+        "200":
+          description: Tool connection list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ToolConnectionListResponse"
+    post:
+      operationId: createToolConnection
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateToolConnectionRequest"
+      responses:
+        "201":
+          description: Created tool connection
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ToolConnectionEnvelope"
+  /v1/runbooks:
+    get:
+      operationId: listRunbooks
+      responses:
+        "200":
+          description: Runbook catalog
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RunbookListResponse"
+  /v1/task-templates:
+    get:
+      operationId: listTaskTemplates
+      responses:
+        "200":
+          description: Task template list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TaskTemplateListResponse"
+  /v1/runs:
+    get:
+      operationId: listRuns
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceIDQuery"
+      responses:
+        "200":
+          description: Run list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RunListResponse"
+    post:
+      operationId: createRun
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateRunRequest"
+      responses:
+        "201":
+          description: Created run
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RunEnvelopeResponse"
+  /v1/runs/{runID}:
+    get:
+      operationId: getRun
+      parameters:
+        - $ref: "#/components/parameters/RunIDPath"
+      responses:
+        "200":
+          description: Run envelope
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RunEnvelopeResponse"
+        "404":
+          $ref: "#/components/responses/ErrorResponse"
+  /v1/runs/{runID}/stream:
+    get:
+      operationId: streamRun
+      parameters:
+        - $ref: "#/components/parameters/RunIDPath"
+      responses:
+        "200":
+          description: SSE stream
+          content:
+            text/event-stream:
+              schema:
+                type: string
+  /v1/artifacts:
+    get:
+      operationId: listArtifacts
+      parameters:
+        - $ref: "#/components/parameters/RunIDQuery"
+      responses:
+        "200":
+          description: Artifact list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ArtifactListResponse"
+  /v1/artifacts/{artifactID}:
+    get:
+      operationId: getArtifact
+      parameters:
+        - $ref: "#/components/parameters/ArtifactIDPath"
+      responses:
+        "200":
+          description: Artifact document
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ArtifactDocumentEnvelope"
+        "404":
+          $ref: "#/components/responses/ErrorResponse"
+  /v1/approvals:
+    get:
+      operationId: listApprovals
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceIDQuery"
+      responses:
+        "200":
+          description: Approval list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApprovalListResponse"
+  /v1/approvals/{approvalID}/approve:
+    post:
+      operationId: approveApproval
+      parameters:
+        - $ref: "#/components/parameters/ApprovalIDPath"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ApprovalDecisionRequest"
+      responses:
+        "200":
+          description: Updated run envelope
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RunEnvelopeResponse"
+  /v1/approvals/{approvalID}/reject:
+    post:
+      operationId: rejectApproval
+      parameters:
+        - $ref: "#/components/parameters/ApprovalIDPath"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ApprovalDecisionRequest"
+      responses:
+        "200":
+          description: Updated run envelope
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RunEnvelopeResponse"
+  /v1/audit-events:
+    get:
+      operationId: listAuditEvents
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceIDQuery"
+        - $ref: "#/components/parameters/RunIDQueryOptional"
+      responses:
+        "200":
+          description: Audit event list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuditEventListResponse"
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: EVO
+  parameters:
+    WorkspaceIDQuery:
+      in: query
+      name: workspace_id
+      required: true
+      schema:
+        type: string
+    RunIDQuery:
+      in: query
+      name: run_id
+      required: true
+      schema:
+        type: string
+    RunIDQueryOptional:
+      in: query
+      name: run_id
+      required: false
+      schema:
+        type: string
+    RunIDPath:
+      in: path
+      name: runID
+      required: true
+      schema:
+        type: string
+    ArtifactIDPath:
+      in: path
+      name: artifactID
+      required: true
+      schema:
+        type: string
+    ApprovalIDPath:
+      in: path
+      name: approvalID
+      required: true
+      schema:
+        type: string
+  responses:
+    ErrorResponse:
+      description: Error response
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+  schemas:
+    HealthResponse:
+      type: object
+      required: [ok, time]
+      properties:
+        ok:
+          type: boolean
+        time:
+          type: string
+          format: date-time
+    ErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+    Org:
+      type: object
+      required: [id, name, slug, created_at]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        slug: { type: string }
+        created_at:
+          type: string
+          format: date-time
+    User:
+      type: object
+      required: [id, org_id, email, display_name, role, created_at]
+      properties:
+        id: { type: string }
+        org_id: { type: string }
+        email: { type: string, format: email }
+        display_name: { type: string }
+        role: { type: string }
+        created_at:
+          type: string
+          format: date-time
+    AuthToken:
+      type: object
+      required: [id, org_id, user_id, label, token_preview, created_at]
+      properties:
+        id: { type: string }
+        org_id: { type: string }
+        user_id: { type: string }
+        label: { type: string }
+        token_preview: { type: string }
+        created_at:
+          type: string
+          format: date-time
+        last_used_at:
+          type: string
+          format: date-time
+    AuthIdentity:
+      type: object
+      required: [org, user, token]
+      properties:
+        org:
+          $ref: "#/components/schemas/Org"
+        user:
+          $ref: "#/components/schemas/User"
+        token:
+          $ref: "#/components/schemas/AuthToken"
+    AuthSession:
+      allOf:
+        - $ref: "#/components/schemas/AuthIdentity"
+        - type: object
+          required: [access_token]
+          properties:
+            access_token:
+              type: string
+    Workspace:
+      type: object
+      required: [id, org_id, name, slug, description, created_at]
+      properties:
+        id: { type: string }
+        org_id: { type: string }
+        name: { type: string }
+        slug: { type: string }
+        description: { type: string }
+        created_at:
+          type: string
+          format: date-time
+    Environment:
+      type: object
+      required: [id, workspace_id, name, slug, kind, created_at]
+      properties:
+        id: { type: string }
+        workspace_id: { type: string }
+        name: { type: string }
+        slug: { type: string }
+        kind: { type: string }
+        created_at:
+          type: string
+          format: date-time
+    ConfigMap:
+      type: object
+      additionalProperties: true
+    ToolConnection:
+      type: object
+      required: [id, workspace_id, name, kind, config, created_at]
+      properties:
+        id: { type: string }
+        workspace_id: { type: string }
+        environment_id: { type: string }
+        name: { type: string }
+        kind: { type: string }
+        config:
+          $ref: "#/components/schemas/ConfigMap"
+        created_at:
+          type: string
+          format: date-time
+    RunbookStep:
+      type: object
+      required: [slug, kind]
+      properties:
+        slug: { type: string }
+        kind: { type: string }
+    Runbook:
+      type: object
+      required:
+        - slug
+        - title
+        - family
+        - description
+        - tool_connections
+        - approval_required
+        - expected_artifacts
+        - failure_modes
+        - rollback_notes
+        - steps
+      properties:
+        slug: { type: string }
+        title: { type: string }
+        family: { type: string }
+        description: { type: string }
+        tool_connections:
+          type: array
+          items: { type: string }
+        approval_required: { type: boolean }
+        expected_artifacts:
+          type: array
+          items: { type: string }
+        failure_modes:
+          type: array
+          items: { type: string }
+        rollback_notes: { type: string }
+        steps:
+          type: array
+          items:
+            $ref: "#/components/schemas/RunbookStep"
+    TaskTemplate:
+      type: object
+      required: [id, runbook_slug, step_slug, kind]
+      properties:
+        id: { type: string }
+        runbook_slug: { type: string }
+        step_slug: { type: string }
+        kind: { type: string }
+    TaskRun:
+      type: object
+      required:
+        - id
+        - org_id
+        - workspace_id
+        - runbook_slug
+        - status
+        - current_step
+        - approval_state
+        - requested_by_surface
+        - requested_by_agent
+        - context
+        - created_at
+        - updated_at
+      properties:
+        id: { type: string }
+        org_id: { type: string }
+        workspace_id: { type: string }
+        environment_id: { type: string }
+        runbook_slug: { type: string }
+        status: { type: string }
+        current_step: { type: integer }
+        approval_state: { type: string }
+        requested_by_surface: { type: string }
+        requested_by_agent: { type: string }
+        context:
+          $ref: "#/components/schemas/ConfigMap"
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    Artifact:
+      type: object
+      required:
+        - id
+        - run_id
+        - workspace_id
+        - kind
+        - content_type
+        - storage_key
+        - created_by_surface
+        - created_by_agent
+        - created_at
+      properties:
+        id: { type: string }
+        run_id: { type: string }
+        workspace_id: { type: string }
+        kind: { type: string }
+        content_type: { type: string }
+        storage_key: { type: string }
+        created_by_surface: { type: string }
+        created_by_agent: { type: string }
+        created_at:
+          type: string
+          format: date-time
+    ApprovalRequest:
+      type: object
+      required:
+        - id
+        - run_id
+        - workspace_id
+        - status
+        - reason
+        - requested_by_surface
+        - requested_by_agent
+        - created_at
+      properties:
+        id: { type: string }
+        run_id: { type: string }
+        workspace_id: { type: string }
+        status: { type: string }
+        reason: { type: string }
+        decision_note: { type: string }
+        requested_by_surface: { type: string }
+        requested_by_agent: { type: string }
+        created_at:
+          type: string
+          format: date-time
+        decided_at:
+          type: string
+          format: date-time
+    AuditEvent:
+      type: object
+      required:
+        - id
+        - org_id
+        - workspace_id
+        - kind
+        - message
+        - payload
+        - created_at
+      properties:
+        id: { type: string }
+        org_id: { type: string }
+        workspace_id: { type: string }
+        run_id: { type: string }
+        approval_request_id: { type: string }
+        kind: { type: string }
+        message: { type: string }
+        payload:
+          $ref: "#/components/schemas/ConfigMap"
+        created_at:
+          type: string
+          format: date-time
+    ArtifactDocument:
+      type: object
+      required: [artifact, content]
+      properties:
+        artifact:
+          $ref: "#/components/schemas/Artifact"
+        content:
+          type: string
+    RunEnvelope:
+      type: object
+      required: [run, approvals, artifacts, events]
+      properties:
+        run:
+          $ref: "#/components/schemas/TaskRun"
+        approvals:
+          type: array
+          items:
+            $ref: "#/components/schemas/ApprovalRequest"
+        artifacts:
+          type: array
+          items:
+            $ref: "#/components/schemas/Artifact"
+        events:
+          type: array
+          items:
+            $ref: "#/components/schemas/AuditEvent"
+        runbook:
+          $ref: "#/components/schemas/Runbook"
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+        label:
+          type: string
+    CreateTokenRequest:
+      type: object
+      properties:
+        label:
+          type: string
+    CreateWorkspaceRequest:
+      type: object
+      required: [name, slug]
+      properties:
+        name: { type: string }
+        slug: { type: string }
+        description: { type: string }
+    CreateEnvironmentRequest:
+      type: object
+      required: [workspace_id, name, slug, kind]
+      properties:
+        workspace_id: { type: string }
+        name: { type: string }
+        slug: { type: string }
+        kind: { type: string }
+    CreateToolConnectionRequest:
+      type: object
+      required: [workspace_id, name, kind]
+      properties:
+        workspace_id: { type: string }
+        environment_id: { type: string }
+        name: { type: string }
+        kind: { type: string }
+        config:
+          $ref: "#/components/schemas/ConfigMap"
+    CreateRunRequest:
+      type: object
+      required: [workspace_id, runbook_slug]
+      properties:
+        workspace_id: { type: string }
+        environment_id: { type: string }
+        runbook_slug: { type: string }
+        context:
+          $ref: "#/components/schemas/ConfigMap"
+    ApprovalDecisionRequest:
+      type: object
+      properties:
+        note:
+          type: string
+    AuthIdentityEnvelope:
+      type: object
+      required: [item]
+      properties:
+        item:
+          $ref: "#/components/schemas/AuthIdentity"
+    AuthSessionEnvelope:
+      type: object
+      required: [item]
+      properties:
+        item:
+          $ref: "#/components/schemas/AuthSession"
+    WorkspaceEnvelope:
+      type: object
+      required: [item]
+      properties:
+        item:
+          $ref: "#/components/schemas/Workspace"
+    EnvironmentEnvelope:
+      type: object
+      required: [item]
+      properties:
+        item:
+          $ref: "#/components/schemas/Environment"
+    ToolConnectionEnvelope:
+      type: object
+      required: [item]
+      properties:
+        item:
+          $ref: "#/components/schemas/ToolConnection"
+    RunEnvelopeResponse:
+      type: object
+      required: [item]
+      properties:
+        item:
+          $ref: "#/components/schemas/RunEnvelope"
+    ArtifactDocumentEnvelope:
+      type: object
+      required: [item]
+      properties:
+        item:
+          $ref: "#/components/schemas/ArtifactDocument"
+    WorkspaceListResponse:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Workspace"
+    EnvironmentListResponse:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Environment"
+    ToolConnectionListResponse:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/ToolConnection"
+    RunbookListResponse:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Runbook"
+    TaskTemplateListResponse:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/TaskTemplate"
+    RunListResponse:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/TaskRun"
+    ArtifactListResponse:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Artifact"
+    ApprovalListResponse:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/ApprovalRequest"
+    AuditEventListResponse:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/AuditEvent"
