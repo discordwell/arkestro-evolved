@@ -247,7 +247,7 @@ func (s *ControlPlane) ListTaskTemplates() []domain.TaskTemplate {
 func (s *ControlPlane) CreateRun(ctx context.Context, orgID, workspaceID, environmentID, runbookSlug string, actor domain.Actor, contextData map[string]any) (domain.RunEnvelope, error) {
 	runbook, ok := s.catalog.Runbook(runbookSlug)
 	if !ok {
-		return domain.RunEnvelope{}, errors.New("runbook not found")
+		return domain.RunEnvelope{}, fmt.Errorf("runbook %w", repo.ErrNotFound)
 	}
 	if workspaceID == "" {
 		return domain.RunEnvelope{}, errors.New("workspace_id is required")
@@ -393,6 +393,15 @@ func (s *ControlPlane) DecideApproval(ctx context.Context, orgID, approvalID, de
 	if err != nil {
 		return domain.RunEnvelope{}, err
 	}
+	// Authorize against the owning run before any state changes so a foreign
+	// org can neither decide nor probe another tenant's approvals.
+	run, err := s.repo.GetTaskRun(ctx, approval.RunID)
+	if err != nil {
+		return domain.RunEnvelope{}, err
+	}
+	if run.OrgID != orgID {
+		return domain.RunEnvelope{}, ErrForbidden
+	}
 	if approval.Status != "pending" {
 		return domain.RunEnvelope{}, errors.New("approval is not pending")
 	}
@@ -409,13 +418,6 @@ func (s *ControlPlane) DecideApproval(ctx context.Context, orgID, approvalID, de
 	approval.DecidedAt = now
 	if _, err := s.repo.UpdateApproval(ctx, approval); err != nil {
 		return domain.RunEnvelope{}, err
-	}
-	run, err := s.repo.GetTaskRun(ctx, approval.RunID)
-	if err != nil {
-		return domain.RunEnvelope{}, err
-	}
-	if run.OrgID != orgID {
-		return domain.RunEnvelope{}, ErrForbidden
 	}
 	if approval.Status == "approved" {
 		run.Status = "queued"
@@ -634,12 +636,12 @@ func (s *ControlPlane) findApproval(ctx context.Context, run domain.TaskRun) (do
 }
 
 func (s *ControlPlane) createArtifact(ctx context.Context, run domain.TaskRun, runbook domain.Runbook, step domain.RunbookStep) (domain.Artifact, error) {
+	// Draft/publish steps emit the runbook's primary expected artifact kind;
+	// other artifact steps are labelled by their step slug.
 	artifactKind := step.Slug
-	for _, candidate := range runbook.ExpectedArtifacts {
-		if strings.Contains(step.Slug, "draft") || strings.Contains(step.Slug, "publish") {
-			artifactKind = candidate
-			break
-		}
+	if len(runbook.ExpectedArtifacts) > 0 &&
+		(strings.Contains(step.Slug, "draft") || strings.Contains(step.Slug, "publish")) {
+		artifactKind = runbook.ExpectedArtifacts[0]
 	}
 	body := fmt.Sprintf("# %s\n\nRun: `%s`\n\nStep: `%s`\n\nContext:\n\n```\n%v\n```\n", runbook.Title, run.ID, step.Slug, run.Context)
 	key := filepath.Join(run.WorkspaceID, run.ID, step.Slug+".md")

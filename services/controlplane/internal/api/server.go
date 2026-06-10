@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/discordwell/evo-control-plane/services/controlplane/internal/domain"
+	"github.com/discordwell/evo-control-plane/services/controlplane/internal/repo"
 	"github.com/discordwell/evo-control-plane/services/controlplane/internal/service"
 	"github.com/go-chi/chi/v5"
 )
@@ -83,7 +84,8 @@ func (s *Server) statusForError(err error) int {
 		return http.StatusUnauthorized
 	case errors.Is(err, service.ErrForbidden):
 		return http.StatusForbidden
-	case strings.Contains(strings.ToLower(err.Error()), "not found"):
+	case errors.Is(err, repo.ErrNotFound),
+		strings.Contains(strings.ToLower(err.Error()), "not found"):
 		return http.StatusNotFound
 	default:
 		return http.StatusBadRequest

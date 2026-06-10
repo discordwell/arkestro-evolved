@@ -28,6 +28,15 @@ func (p *Postgres) Close() {
 	p.db.Close()
 }
 
+// mapNotFound converts pgx's no-rows error into the backend-agnostic
+// repo.ErrNotFound wrapper so the API layer can map it to HTTP 404.
+func mapNotFound(entity string, err error) error {
+	if errors.Is(err, pgx.ErrNoRows) {
+		return fmt.Errorf("%s %w", entity, ErrNotFound)
+	}
+	return err
+}
+
 func (p *Postgres) EnsureSchema(ctx context.Context) error {
 	conn, err := p.db.Acquire(ctx)
 	if err != nil {
@@ -190,7 +199,8 @@ func (p *Postgres) GetOrg(ctx context.Context, id string) (domain.Org, error) {
 SELECT id, name, slug, created_at
 FROM orgs WHERE id = $1
 `, id)
-	return scanOrg(row)
+	out, err := scanOrg(row)
+	return out, mapNotFound("org", err)
 }
 
 func (p *Postgres) EnsureDefaultUser(ctx context.Context, user domain.UserRecord) error {
@@ -207,7 +217,8 @@ func (p *Postgres) GetUserByEmail(ctx context.Context, email string) (domain.Use
 SELECT id, org_id, email, display_name, role, password_hash, created_at
 FROM users WHERE email = $1
 `, email)
-	return scanUser(row)
+	out, err := scanUser(row)
+	return out, mapNotFound("user", err)
 }
 
 func (p *Postgres) GetUserByID(ctx context.Context, id string) (domain.UserRecord, error) {
@@ -215,7 +226,8 @@ func (p *Postgres) GetUserByID(ctx context.Context, id string) (domain.UserRecor
 SELECT id, org_id, email, display_name, role, password_hash, created_at
 FROM users WHERE id = $1
 `, id)
-	return scanUser(row)
+	out, err := scanUser(row)
+	return out, mapNotFound("user", err)
 }
 
 func (p *Postgres) CreateAuthToken(ctx context.Context, token domain.AuthTokenRecord) (domain.AuthTokenRecord, error) {
@@ -235,7 +247,8 @@ func (p *Postgres) GetAuthTokenByHash(ctx context.Context, tokenHash string) (do
 SELECT id, org_id, user_id, label, token_hash, token_preview, created_at, last_used_at
 FROM auth_tokens WHERE token_hash = $1
 `, tokenHash)
-	return scanAuthToken(row)
+	out, err := scanAuthToken(row)
+	return out, mapNotFound("auth token", err)
 }
 
 func (p *Postgres) TouchAuthToken(ctx context.Context, id string, token domain.AuthToken) error {
@@ -270,7 +283,8 @@ func (p *Postgres) GetWorkspace(ctx context.Context, id string) (domain.Workspac
 SELECT id, org_id, name, slug, description, created_at
 FROM workspaces WHERE id = $1
 `, id)
-	return scanWorkspace(row)
+	out, err := scanWorkspace(row)
+	return out, mapNotFound("workspace", err)
 }
 
 func (p *Postgres) CreateWorkspace(ctx context.Context, workspace domain.Workspace) (domain.Workspace, error) {
@@ -300,7 +314,8 @@ func (p *Postgres) GetEnvironment(ctx context.Context, id string) (domain.Enviro
 SELECT id, workspace_id, name, slug, kind, created_at
 FROM environments WHERE id = $1
 `, id)
-	return scanEnvironment(row)
+	out, err := scanEnvironment(row)
+	return out, mapNotFound("environment", err)
 }
 
 func (p *Postgres) CreateEnvironment(ctx context.Context, env domain.Environment) (domain.Environment, error) {
@@ -368,7 +383,8 @@ func (p *Postgres) GetTaskRun(ctx context.Context, id string) (domain.TaskRun, e
 SELECT id, org_id, workspace_id, environment_id, runbook_slug, status, current_step, approval_state, requested_by_surface, requested_by_agent, context_json, created_at, updated_at
 FROM task_runs WHERE id = $1
 `, id)
-	return scanRun(row)
+	out, err := scanRun(row)
+	return out, mapNotFound("task run", err)
 }
 
 func (p *Postgres) UpdateTaskRun(ctx context.Context, run domain.TaskRun) (domain.TaskRun, error) {
@@ -437,7 +453,8 @@ func (p *Postgres) GetArtifact(ctx context.Context, id string) (domain.Artifact,
 SELECT id, run_id, workspace_id, kind, content_type, storage_key, created_by_surface, created_by_agent, created_at
 FROM artifacts WHERE id = $1
 `, id)
-	return scanArtifact(row)
+	out, err := scanArtifact(row)
+	return out, mapNotFound("artifact", err)
 }
 
 func (p *Postgres) CreateApproval(ctx context.Context, approval domain.ApprovalRequest) (domain.ApprovalRequest, error) {
@@ -467,7 +484,8 @@ func (p *Postgres) GetApproval(ctx context.Context, id string) (domain.ApprovalR
 SELECT id, run_id, workspace_id, status, reason, decision_note, requested_by_surface, requested_by_agent, created_at, decided_at
 FROM approval_requests WHERE id = $1
 `, id)
-	return scanApproval(row)
+	out, err := scanApproval(row)
+	return out, mapNotFound("approval", err)
 }
 
 func (p *Postgres) UpdateApproval(ctx context.Context, approval domain.ApprovalRequest) (domain.ApprovalRequest, error) {

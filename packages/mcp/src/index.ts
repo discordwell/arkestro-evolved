@@ -12,7 +12,7 @@ export const toolDefinitions = [
   { name: "runbook.list", description: "List runbooks", inputSchema: { type: "object", properties: {} } },
   { name: "runbook.run", description: "Create a run from a runbook", inputSchema: { type: "object", required: ["workspace_id", "runbook_slug"], properties: { workspace_id: { type: "string" }, environment_id: { type: "string" }, runbook_slug: { type: "string" }, context: { type: "object" } } } },
   { name: "run.get", description: "Get a run envelope", inputSchema: { type: "object", required: ["run_id"], properties: { run_id: { type: "string" } } } },
-  { name: "run.stream", description: "Poll a run until terminal", inputSchema: { type: "object", required: ["run_id"], properties: { run_id: { type: "string" }, interval_ms: { type: "number" } } } },
+  { name: "run.stream", description: "Poll a run until it completes, fails, is rejected, needs approval, or the timeout elapses; returns the latest run envelope", inputSchema: { type: "object", required: ["run_id"], properties: { run_id: { type: "string" }, interval_ms: { type: "number" }, timeout_ms: { type: "number", description: "Maximum time to poll in milliseconds (default 120000; 0 checks once and returns)" } } } },
   { name: "artifact.list", description: "List artifacts for a run", inputSchema: { type: "object", required: ["run_id"], properties: { run_id: { type: "string" } } } },
   { name: "artifact.get", description: "Get artifact content", inputSchema: { type: "object", required: ["artifact_id"], properties: { artifact_id: { type: "string" } } } },
   { name: "approval.list", description: "List approvals for a workspace", inputSchema: { type: "object", required: ["workspace_id"], properties: { workspace_id: { type: "string" } } } },
@@ -22,6 +22,38 @@ export const toolDefinitions = [
 ] as const;
 
 type TransportMode = "stdio" | "http";
+
+// Statuses where polling should hand control back to the caller: terminal
+// states plus awaiting_approval, which needs an approve/reject decision
+// before the run can make further progress.
+const SETTLED_RUN_STATUSES = new Set(["completed", "failed", "rejected", "awaiting_approval"]);
+
+export interface PollRunOptions {
+  intervalMs?: number;
+  timeoutMs?: number;
+  sleep?: (ms: number) => Promise<void>;
+}
+
+const defaultSleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+function numberOrFallback(value: unknown, fallback: number, minimum: number): number {
+  const num = Number(value);
+  return Number.isFinite(num) && num >= minimum ? num : fallback;
+}
+
+export async function pollRunUntilSettled<T extends { run: { status?: string } }>(
+  getRun: () => Promise<T>,
+  { intervalMs = 1000, timeoutMs = 120_000, sleep = defaultSleep }: PollRunOptions = {}
+): Promise<T> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const envelope = await getRun();
+    if (SETTLED_RUN_STATUSES.has(envelope.run.status ?? "") || Date.now() >= deadline) {
+      return envelope;
+    }
+    await sleep(Math.min(intervalMs, Math.max(deadline - Date.now(), 0)));
+  }
+}
 
 export function transportModeFromArgs(argv: string[], env: NodeJS.ProcessEnv = process.env): TransportMode {
   if (env.EVO_MCP_TRANSPORT === "http" || argv.includes("--transport=http") || argv.includes("http")) {
@@ -49,16 +81,11 @@ export async function executeTool(client: EvoClient, name: string, args: Record<
       });
     case "run.get":
       return client.getRun(String(args.run_id));
-    case "run.stream": {
-      const intervalMs = Number(args.interval_ms || 1000);
-      for (;;) {
-        const run = await client.getRun(String(args.run_id));
-        if (["completed", "failed", "rejected"].includes(run.run.status)) {
-          return run;
-        }
-        await new Promise((resolve) => setTimeout(resolve, intervalMs));
-      }
-    }
+    case "run.stream":
+      return pollRunUntilSettled(() => client.getRun(String(args.run_id)), {
+        intervalMs: numberOrFallback(args.interval_ms, 1000, 1),
+        timeoutMs: numberOrFallback(args.timeout_ms, 120_000, 0)
+      });
     case "artifact.list":
       return client.listArtifacts(String(args.run_id));
     case "artifact.get":

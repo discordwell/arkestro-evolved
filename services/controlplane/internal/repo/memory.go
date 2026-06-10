@@ -2,9 +2,10 @@ package repo
 
 import (
 	"context"
-	"errors"
+	"fmt"
 	"sort"
 	"sync"
+	"time"
 
 	"github.com/discordwell/evo-control-plane/services/controlplane/internal/domain"
 )
@@ -24,7 +25,6 @@ type Memory struct {
 	approvals    map[string]domain.ApprovalRequest
 	policies     map[string]domain.PolicyRule
 	events       map[string]domain.AuditEvent
-	claimedRuns  map[string]bool
 }
 
 func NewMemory() *Memory {
@@ -42,7 +42,6 @@ func NewMemory() *Memory {
 		approvals:    make(map[string]domain.ApprovalRequest),
 		policies:     make(map[string]domain.PolicyRule),
 		events:       make(map[string]domain.AuditEvent),
-		claimedRuns:  make(map[string]bool),
 	}
 }
 
@@ -60,7 +59,7 @@ func (m *Memory) GetOrg(_ context.Context, id string) (domain.Org, error) {
 	defer m.mu.Unlock()
 	org, ok := m.orgs[id]
 	if !ok {
-		return domain.Org{}, errors.New("org not found")
+		return domain.Org{}, fmt.Errorf("org %w", ErrNotFound)
 	}
 	return org, nil
 }
@@ -81,7 +80,7 @@ func (m *Memory) GetUserByEmail(_ context.Context, email string) (domain.UserRec
 	defer m.mu.Unlock()
 	id, ok := m.usersByMail[email]
 	if !ok {
-		return domain.UserRecord{}, errors.New("user not found")
+		return domain.UserRecord{}, fmt.Errorf("user %w", ErrNotFound)
 	}
 	return m.users[id], nil
 }
@@ -91,7 +90,7 @@ func (m *Memory) GetUserByID(_ context.Context, id string) (domain.UserRecord, e
 	defer m.mu.Unlock()
 	user, ok := m.users[id]
 	if !ok {
-		return domain.UserRecord{}, errors.New("user not found")
+		return domain.UserRecord{}, fmt.Errorf("user %w", ErrNotFound)
 	}
 	return user, nil
 }
@@ -109,7 +108,7 @@ func (m *Memory) GetAuthTokenByHash(_ context.Context, tokenHash string) (domain
 	defer m.mu.Unlock()
 	id, ok := m.tokensByHash[tokenHash]
 	if !ok {
-		return domain.AuthTokenRecord{}, errors.New("auth token not found")
+		return domain.AuthTokenRecord{}, fmt.Errorf("auth token %w", ErrNotFound)
 	}
 	return m.tokens[id], nil
 }
@@ -119,7 +118,7 @@ func (m *Memory) TouchAuthToken(_ context.Context, id string, token domain.AuthT
 	defer m.mu.Unlock()
 	record, ok := m.tokens[id]
 	if !ok {
-		return errors.New("auth token not found")
+		return fmt.Errorf("auth token %w", ErrNotFound)
 	}
 	record.AuthToken = token
 	m.tokens[id] = record
@@ -144,7 +143,7 @@ func (m *Memory) GetWorkspace(_ context.Context, id string) (domain.Workspace, e
 	defer m.mu.Unlock()
 	workspace, ok := m.workspaces[id]
 	if !ok {
-		return domain.Workspace{}, errors.New("workspace not found")
+		return domain.Workspace{}, fmt.Errorf("workspace %w", ErrNotFound)
 	}
 	return workspace, nil
 }
@@ -174,7 +173,7 @@ func (m *Memory) GetEnvironment(_ context.Context, id string) (domain.Environmen
 	defer m.mu.Unlock()
 	env, ok := m.envs[id]
 	if !ok {
-		return domain.Environment{}, errors.New("environment not found")
+		return domain.Environment{}, fmt.Errorf("environment %w", ErrNotFound)
 	}
 	return env, nil
 }
@@ -231,7 +230,7 @@ func (m *Memory) GetTaskRun(_ context.Context, id string) (domain.TaskRun, error
 	defer m.mu.Unlock()
 	run, ok := m.runs[id]
 	if !ok {
-		return domain.TaskRun{}, errors.New("task run not found")
+		return domain.TaskRun{}, fmt.Errorf("task run %w", ErrNotFound)
 	}
 	return run, nil
 }
@@ -240,26 +239,33 @@ func (m *Memory) UpdateTaskRun(_ context.Context, run domain.TaskRun) (domain.Ta
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.runs[run.ID] = run
-	delete(m.claimedRuns, run.ID)
 	return run, nil
 }
 
+// ClaimQueuedRun mirrors the Postgres implementation: the oldest queued run
+// is atomically marked running so concurrent workers never claim it twice.
 func (m *Memory) ClaimQueuedRun(_ context.Context) (domain.TaskRun, bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	keys := make([]string, 0, len(m.runs))
-	for id := range m.runs {
-		keys = append(keys, id)
-	}
-	sort.Strings(keys)
-	for _, id := range keys {
-		run := m.runs[id]
-		if run.Status == "queued" && !m.claimedRuns[id] {
-			m.claimedRuns[id] = true
-			return run, true, nil
+	var oldest domain.TaskRun
+	found := false
+	for _, run := range m.runs {
+		if run.Status != "queued" {
+			continue
+		}
+		if !found || run.CreatedAt.Before(oldest.CreatedAt) ||
+			(run.CreatedAt.Equal(oldest.CreatedAt) && run.ID < oldest.ID) {
+			oldest = run
+			found = true
 		}
 	}
-	return domain.TaskRun{}, false, nil
+	if !found {
+		return domain.TaskRun{}, false, nil
+	}
+	oldest.Status = "running"
+	oldest.UpdatedAt = time.Now().UTC()
+	m.runs[oldest.ID] = oldest
+	return oldest, true, nil
 }
 
 func (m *Memory) CreateArtifact(_ context.Context, artifact domain.Artifact) (domain.Artifact, error) {
@@ -287,7 +293,7 @@ func (m *Memory) GetArtifact(_ context.Context, id string) (domain.Artifact, err
 	defer m.mu.Unlock()
 	artifact, ok := m.artifacts[id]
 	if !ok {
-		return domain.Artifact{}, errors.New("artifact not found")
+		return domain.Artifact{}, fmt.Errorf("artifact %w", ErrNotFound)
 	}
 	return artifact, nil
 }
@@ -317,7 +323,7 @@ func (m *Memory) GetApproval(_ context.Context, id string) (domain.ApprovalReque
 	defer m.mu.Unlock()
 	approval, ok := m.approvals[id]
 	if !ok {
-		return domain.ApprovalRequest{}, errors.New("approval not found")
+		return domain.ApprovalRequest{}, fmt.Errorf("approval %w", ErrNotFound)
 	}
 	return approval, nil
 }

@@ -2,6 +2,7 @@ package service_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -133,5 +134,88 @@ func TestLoginAndTenantGuards(t *testing.T) {
 	}
 	if _, err := svc.GetRunEnvelope(context.Background(), "org-2", run.Run.ID); err == nil {
 		t.Fatalf("expected cross-org access to fail")
+	}
+}
+
+func awaitApproval(t *testing.T, svc *service.ControlPlane, orgID, workspaceID, envID string) domain.RunEnvelope {
+	t.Helper()
+	ctx := context.Background()
+	run, err := svc.CreateRun(ctx, orgID, workspaceID, envID, "release-coordination", domain.Actor{Surface: "mcp", Agent: "claude"}, nil)
+	if err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	if _, err := svc.ProcessNextRun(ctx); err != nil {
+		t.Fatalf("process: %v", err)
+	}
+	waiting, err := svc.GetRunEnvelope(ctx, orgID, run.Run.ID)
+	if err != nil {
+		t.Fatalf("get run: %v", err)
+	}
+	if waiting.Run.Status != "awaiting_approval" || len(waiting.Approvals) != 1 {
+		t.Fatalf("expected pending approval, got status=%s approvals=%d", waiting.Run.Status, len(waiting.Approvals))
+	}
+	return waiting
+}
+
+func TestDecideApprovalCrossOrgIsForbiddenAndDoesNotMutate(t *testing.T) {
+	svc := newService(t)
+	workspace, env := setupWorkspace(t, svc)
+	ctx := context.Background()
+
+	waiting := awaitApproval(t, svc, "org-1", workspace.ID, env.ID)
+	approvalID := waiting.Approvals[0].ID
+
+	if _, err := svc.DecideApproval(ctx, "org-2", approvalID, "approve", "sneaky"); !errors.Is(err, service.ErrForbidden) {
+		t.Fatalf("expected ErrForbidden, got %v", err)
+	}
+
+	after, err := svc.GetRunEnvelope(ctx, "org-1", waiting.Run.ID)
+	if err != nil {
+		t.Fatalf("get run: %v", err)
+	}
+	if after.Approvals[0].Status != "pending" {
+		t.Fatalf("cross-org decision must not persist, approval status=%s", after.Approvals[0].Status)
+	}
+	if after.Run.Status != "awaiting_approval" {
+		t.Fatalf("run must stay awaiting approval, got %s", after.Run.Status)
+	}
+
+	// The rightful org can still decide the untouched approval.
+	if _, err := svc.DecideApproval(ctx, "org-1", approvalID, "approve", "ok"); err != nil {
+		t.Fatalf("legitimate approval failed: %v", err)
+	}
+}
+
+func TestDecideApprovalRejectsInvalidDecision(t *testing.T) {
+	svc := newService(t)
+	workspace, env := setupWorkspace(t, svc)
+	ctx := context.Background()
+
+	waiting := awaitApproval(t, svc, "org-1", workspace.ID, env.ID)
+	if _, err := svc.DecideApproval(ctx, "org-1", waiting.Approvals[0].ID, "maybe", ""); err == nil {
+		t.Fatalf("expected invalid decision to fail")
+	}
+	after, err := svc.GetRunEnvelope(ctx, "org-1", waiting.Run.ID)
+	if err != nil {
+		t.Fatalf("get run: %v", err)
+	}
+	if after.Approvals[0].Status != "pending" {
+		t.Fatalf("invalid decision must not persist, approval status=%s", after.Approvals[0].Status)
+	}
+}
+
+func TestMissingResourcesWrapErrNotFound(t *testing.T) {
+	svc := newService(t)
+	workspace, env := setupWorkspace(t, svc)
+	ctx := context.Background()
+
+	if _, err := svc.CreateRun(ctx, "org-1", workspace.ID, env.ID, "no-such-runbook", domain.Actor{}, nil); !errors.Is(err, repo.ErrNotFound) {
+		t.Fatalf("expected ErrNotFound for unknown runbook, got %v", err)
+	}
+	if _, err := svc.GetRunEnvelope(ctx, "org-1", "no-such-run"); !errors.Is(err, repo.ErrNotFound) {
+		t.Fatalf("expected ErrNotFound for unknown run, got %v", err)
+	}
+	if _, err := svc.GetArtifactDocument(ctx, "org-1", "no-such-artifact"); !errors.Is(err, repo.ErrNotFound) {
+		t.Fatalf("expected ErrNotFound for unknown artifact, got %v", err)
 	}
 }

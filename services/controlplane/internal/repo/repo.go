@@ -2,9 +2,15 @@ package repo
 
 import (
 	"context"
+	"errors"
 
 	"github.com/discordwell/evo-control-plane/services/controlplane/internal/domain"
 )
+
+// ErrNotFound is wrapped by every repository implementation when a requested
+// record does not exist, so callers can branch with errors.Is regardless of
+// the backend (the API layer maps it to HTTP 404).
+var ErrNotFound = errors.New("not found")
 
 type Repository interface {
 	EnsureSchema(context.Context) error
