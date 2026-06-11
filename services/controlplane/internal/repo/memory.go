@@ -45,6 +45,26 @@ func NewMemory() *Memory {
 	}
 }
 
+// sortByCreation orders items by creation time with the ID as tiebreaker so
+// list results are deterministic even when timestamps collide, mirroring the
+// ORDER BY created_at, id clauses in the Postgres implementation.
+func sortByCreation[T any](items []T, newestFirst bool, key func(T) (time.Time, string)) {
+	sort.Slice(items, func(i, j int) bool {
+		ti, idi := key(items[i])
+		tj, idj := key(items[j])
+		if ti.Equal(tj) {
+			if newestFirst {
+				return idi > idj
+			}
+			return idi < idj
+		}
+		if newestFirst {
+			return ti.After(tj)
+		}
+		return ti.Before(tj)
+	})
+}
+
 func (m *Memory) EnsureSchema(context.Context) error { return nil }
 
 func (m *Memory) EnsureDefaultOrg(_ context.Context, org domain.Org) error {
@@ -134,7 +154,7 @@ func (m *Memory) ListWorkspaces(_ context.Context, orgID string) ([]domain.Works
 			out = append(out, workspace)
 		}
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.Before(out[j].CreatedAt) })
+	sortByCreation(out, false, func(w domain.Workspace) (time.Time, string) { return w.CreatedAt, w.ID })
 	return out, nil
 }
 
@@ -164,7 +184,7 @@ func (m *Memory) ListEnvironments(_ context.Context, workspaceID string) ([]doma
 			out = append(out, env)
 		}
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.Before(out[j].CreatedAt) })
+	sortByCreation(out, false, func(e domain.Environment) (time.Time, string) { return e.CreatedAt, e.ID })
 	return out, nil
 }
 
@@ -194,7 +214,7 @@ func (m *Memory) ListToolConnections(_ context.Context, workspaceID string) ([]d
 			out = append(out, tool)
 		}
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.Before(out[j].CreatedAt) })
+	sortByCreation(out, false, func(tc domain.ToolConnection) (time.Time, string) { return tc.CreatedAt, tc.ID })
 	return out, nil
 }
 
@@ -221,7 +241,8 @@ func (m *Memory) ListTaskRuns(_ context.Context, workspaceID string) ([]domain.T
 			out = append(out, run)
 		}
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.Before(out[j].CreatedAt) })
+	// Newest first, matching the Postgres implementation.
+	sortByCreation(out, true, func(r domain.TaskRun) (time.Time, string) { return r.CreatedAt, r.ID })
 	return out, nil
 }
 
@@ -284,7 +305,7 @@ func (m *Memory) ListArtifactsByRun(_ context.Context, runID string) ([]domain.A
 			out = append(out, artifact)
 		}
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.Before(out[j].CreatedAt) })
+	sortByCreation(out, false, func(a domain.Artifact) (time.Time, string) { return a.CreatedAt, a.ID })
 	return out, nil
 }
 
@@ -314,7 +335,8 @@ func (m *Memory) ListApprovals(_ context.Context, workspaceID string) ([]domain.
 			out = append(out, approval)
 		}
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.Before(out[j].CreatedAt) })
+	// Newest first, matching the Postgres implementation.
+	sortByCreation(out, true, func(a domain.ApprovalRequest) (time.Time, string) { return a.CreatedAt, a.ID })
 	return out, nil
 }
 
@@ -328,10 +350,20 @@ func (m *Memory) GetApproval(_ context.Context, id string) (domain.ApprovalReque
 	return approval, nil
 }
 
-func (m *Memory) UpdateApproval(_ context.Context, approval domain.ApprovalRequest) (domain.ApprovalRequest, error) {
+func (m *Memory) DecideApproval(_ context.Context, id, status, note string, decidedAt time.Time) (domain.ApprovalRequest, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.approvals[approval.ID] = approval
+	approval, ok := m.approvals[id]
+	if !ok {
+		return domain.ApprovalRequest{}, fmt.Errorf("approval %w", ErrNotFound)
+	}
+	if approval.Status != "pending" {
+		return domain.ApprovalRequest{}, ErrNotPending
+	}
+	approval.Status = status
+	approval.DecisionNote = note
+	approval.DecidedAt = decidedAt
+	m.approvals[id] = approval
 	return approval, nil
 }
 
@@ -344,7 +376,7 @@ func (m *Memory) ListPolicies(_ context.Context, workspaceID string) ([]domain.P
 			out = append(out, rule)
 		}
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.Before(out[j].CreatedAt) })
+	sortByCreation(out, false, func(p domain.PolicyRule) (time.Time, string) { return p.CreatedAt, p.ID })
 	return out, nil
 }
 
@@ -375,6 +407,6 @@ func (m *Memory) ListAuditEvents(_ context.Context, workspaceID, runID string) (
 		}
 		out = append(out, event)
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.Before(out[j].CreatedAt) })
+	sortByCreation(out, false, func(e domain.AuditEvent) (time.Time, string) { return e.CreatedAt, e.ID })
 	return out, nil
 }

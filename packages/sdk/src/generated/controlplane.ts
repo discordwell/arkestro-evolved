@@ -426,6 +426,8 @@ export interface components {
             id: string;
             run_id: string;
             workspace_id: string;
+            /** @description Index of the runbook step this approval gates. */
+            step_index: number;
             status: string;
             reason: string;
             decision_note?: string;

@@ -144,6 +144,7 @@ type ApprovalRequest struct {
 	ID                 string    `json:"id"`
 	RunID              string    `json:"run_id"`
 	WorkspaceID        string    `json:"workspace_id"`
+	StepIndex          int       `json:"step_index"`
 	Status             string    `json:"status"`
 	Reason             string    `json:"reason"`
 	DecisionNote       string    `json:"decision_note,omitempty"`

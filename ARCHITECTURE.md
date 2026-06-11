@@ -23,15 +23,25 @@ client over the HTTP API.
 
 ## Control plane layout (`services/controlplane/internal`)
 
-- `api` — chi router, bearer-token auth middleware, JSON handlers, SSE run stream.
+- `api` — chi router, bearer-token auth middleware, JSON handlers, SSE run
+  stream (dedupes by audit-event ID, so reordered polls never drop or repeat
+  events).
 - `service` — the `ControlPlane` orchestrator: auth, tenancy checks, run
   lifecycle, approval decisions, artifact creation, audit events.
 - `repo` — `Repository` interface with two implementations: `Memory` (tests)
   and `Postgres` (pgx, schema auto-created under an advisory lock). Both wrap
-  `repo.ErrNotFound` for missing records; the API maps it to HTTP 404.
+  `repo.ErrNotFound` for missing records; the API maps it to HTTP 404. List
+  results order deterministically by `(created_at, id)` — runs and approvals
+  newest first, everything else oldest first — identically in both backends.
 - `storage` — artifact object store: filesystem (default) or S3-compatible.
-- `catalog` — loads the runbook catalog JSON used to validate and drive runs.
+- `catalog` — loads the runbook catalog JSON and validates it at boot (unique
+  runbook/step slugs, known step kinds, `approval_required` consistent with
+  the presence of approval steps), so a broken catalog cannot fail runs
+  mid-execution.
 - `worker` — polling loop that claims queued runs and executes runbook steps.
+  The queue drains without waiting while claims succeed; after an error or an
+  idle poll the worker waits one poll interval, so a persistent failure (e.g.
+  the database being down) cannot spin the loop hot.
 - `config` — `EVO_*` environment configuration with local-dev defaults.
 
 ## Run lifecycle
@@ -48,21 +58,28 @@ queued -> running -> [awaiting_approval -> queued] -> completed | failed | rejec
 - The worker claims the oldest queued run (`FOR UPDATE SKIP LOCKED` in
   Postgres; the memory repo mirrors the same mark-running-on-claim semantics)
   and advances steps, emitting audit events per step.
-- An `approval` step creates an `approval_request`, parks the run in
-  `awaiting_approval`, and stops. Approving re-queues the run; rejecting
-  terminates it as `rejected`.
+- An `approval` step creates an `approval_request` scoped to that step
+  (`step_index`), parks the run in `awaiting_approval`, and stops. Approving
+  re-queues the run; rejecting terminates it as `rejected`. A runbook with
+  several approval steps gates on each one — a decision never satisfies a
+  later gate. (Approvals persisted before step scoping carry index 0 and are
+  honored for the runbook's first approval step.)
 - `artifact` steps write markdown documents to the object store and register
   them with the run.
 
 Approval decisions are tenant-checked against the owning run's org **before**
-any state is persisted (`service.DecideApproval`).
+any state is persisted (`service.DecideApproval`), and the pending→decided
+transition is compare-and-swap in the repository, so concurrent decisions
+resolve to exactly one winner (the rest get `repo.ErrNotPending` → HTTP 400).
 
 ## Auth model
 
 - `POST /v1/auth/login` (bootstrap admin from `EVO_DEFAULT_ADMIN_*`) returns a
   bearer token; all other `/v1/*` routes require one.
 - Tokens are stored as SHA-256 hashes; only a short preview is kept readable.
-  Passwords are bcrypt-hashed.
+  Passwords are bcrypt-hashed. Login burns a dummy bcrypt compare for unknown
+  emails so response timing cannot enumerate accounts, and `last_used_at`
+  refreshes at most once per minute instead of writing on every request.
 - Every request resolves the token to an org + user principal; list/get
   operations are scoped through `authorizeWorkspace` / org-ID comparisons.
 - Actor attribution (`X-Actor-Surface`, `X-Actor-Agent`, `X-Actor-User`)

@@ -3,6 +3,7 @@ package repo
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/discordwell/evo-control-plane/services/controlplane/internal/domain"
 )
@@ -11,6 +12,10 @@ import (
 // record does not exist, so callers can branch with errors.Is regardless of
 // the backend (the API layer maps it to HTTP 404).
 var ErrNotFound = errors.New("not found")
+
+// ErrNotPending is returned by DecideApproval when the approval has already
+// been decided, so concurrent decisions cannot both win.
+var ErrNotPending = errors.New("approval is not pending")
 
 type Repository interface {
 	EnsureSchema(context.Context) error
@@ -48,7 +53,9 @@ type Repository interface {
 	CreateApproval(context.Context, domain.ApprovalRequest) (domain.ApprovalRequest, error)
 	ListApprovals(context.Context, string) ([]domain.ApprovalRequest, error)
 	GetApproval(context.Context, string) (domain.ApprovalRequest, error)
-	UpdateApproval(context.Context, domain.ApprovalRequest) (domain.ApprovalRequest, error)
+	// DecideApproval atomically transitions a pending approval to the given
+	// status; it returns ErrNotPending if the approval was already decided.
+	DecideApproval(ctx context.Context, id, status, note string, decidedAt time.Time) (domain.ApprovalRequest, error)
 
 	ListPolicies(context.Context, string) ([]domain.PolicyRule, error)
 	CreatePolicy(context.Context, domain.PolicyRule) (domain.PolicyRule, error)

@@ -146,6 +146,7 @@ CREATE TABLE IF NOT EXISTS approval_requests (
   id TEXT PRIMARY KEY,
   run_id TEXT NOT NULL REFERENCES task_runs(id) ON DELETE CASCADE,
   workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  step_index INTEGER NOT NULL DEFAULT 0,
   status TEXT NOT NULL,
   reason TEXT NOT NULL,
   decision_note TEXT NOT NULL DEFAULT '',
@@ -154,6 +155,7 @@ CREATE TABLE IF NOT EXISTS approval_requests (
   created_at TIMESTAMPTZ NOT NULL,
   decided_at TIMESTAMPTZ
 );
+ALTER TABLE approval_requests ADD COLUMN IF NOT EXISTS step_index INTEGER NOT NULL DEFAULT 0;
 CREATE INDEX IF NOT EXISTS idx_approval_requests_workspace_id ON approval_requests(workspace_id);
 CREATE INDEX IF NOT EXISTS idx_approval_requests_run_id ON approval_requests(run_id);
 
@@ -269,7 +271,7 @@ func (p *Postgres) ListWorkspaces(ctx context.Context, orgID string) ([]domain.W
 SELECT id, org_id, name, slug, description, created_at
 FROM workspaces
 WHERE org_id = $1
-ORDER BY created_at ASC
+ORDER BY created_at ASC, id ASC
 `, orgID)
 	if err != nil {
 		return nil, err
@@ -300,7 +302,7 @@ func (p *Postgres) ListEnvironments(ctx context.Context, workspaceID string) ([]
 SELECT id, workspace_id, name, slug, kind, created_at
 FROM environments
 WHERE workspace_id = $1
-ORDER BY created_at ASC
+ORDER BY created_at ASC, id ASC
 `, workspaceID)
 	if err != nil {
 		return nil, err
@@ -331,7 +333,7 @@ func (p *Postgres) ListToolConnections(ctx context.Context, workspaceID string) 
 SELECT id, workspace_id, environment_id, name, kind, config_json, created_at
 FROM tool_connections
 WHERE workspace_id = $1
-ORDER BY created_at ASC
+ORDER BY created_at ASC, id ASC
 `, workspaceID)
 	if err != nil {
 		return nil, err
@@ -369,7 +371,7 @@ func (p *Postgres) ListTaskRuns(ctx context.Context, workspaceID string) ([]doma
 SELECT id, org_id, workspace_id, environment_id, runbook_slug, status, current_step, approval_state, requested_by_surface, requested_by_agent, context_json, created_at, updated_at
 FROM task_runs
 WHERE workspace_id = $1
-ORDER BY created_at DESC
+ORDER BY created_at DESC, id DESC
 `, workspaceID)
 	if err != nil {
 		return nil, err
@@ -406,7 +408,7 @@ WITH next_run AS (
   SELECT id
   FROM task_runs
   WHERE status = 'queued'
-  ORDER BY created_at ASC
+  ORDER BY created_at ASC, id ASC
   LIMIT 1
   FOR UPDATE SKIP LOCKED
 )
@@ -439,7 +441,7 @@ func (p *Postgres) ListArtifactsByRun(ctx context.Context, runID string) ([]doma
 SELECT id, run_id, workspace_id, kind, content_type, storage_key, created_by_surface, created_by_agent, created_at
 FROM artifacts
 WHERE run_id = $1
-ORDER BY created_at ASC
+ORDER BY created_at ASC, id ASC
 `, runID)
 	if err != nil {
 		return nil, err
@@ -459,18 +461,18 @@ FROM artifacts WHERE id = $1
 
 func (p *Postgres) CreateApproval(ctx context.Context, approval domain.ApprovalRequest) (domain.ApprovalRequest, error) {
 	_, err := p.db.Exec(ctx, `
-INSERT INTO approval_requests(id, run_id, workspace_id, status, reason, decision_note, requested_by_surface, requested_by_agent, created_at, decided_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NULL)
-`, approval.ID, approval.RunID, approval.WorkspaceID, approval.Status, approval.Reason, approval.DecisionNote, approval.RequestedBySurface, approval.RequestedByAgent, approval.CreatedAt)
+INSERT INTO approval_requests(id, run_id, workspace_id, step_index, status, reason, decision_note, requested_by_surface, requested_by_agent, created_at, decided_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NULL)
+`, approval.ID, approval.RunID, approval.WorkspaceID, approval.StepIndex, approval.Status, approval.Reason, approval.DecisionNote, approval.RequestedBySurface, approval.RequestedByAgent, approval.CreatedAt)
 	return approval, err
 }
 
 func (p *Postgres) ListApprovals(ctx context.Context, workspaceID string) ([]domain.ApprovalRequest, error) {
 	rows, err := p.db.Query(ctx, `
-SELECT id, run_id, workspace_id, status, reason, decision_note, requested_by_surface, requested_by_agent, created_at, decided_at
+SELECT id, run_id, workspace_id, step_index, status, reason, decision_note, requested_by_surface, requested_by_agent, created_at, decided_at
 FROM approval_requests
 WHERE workspace_id = $1
-ORDER BY created_at DESC
+ORDER BY created_at DESC, id DESC
 `, workspaceID)
 	if err != nil {
 		return nil, err
@@ -481,24 +483,29 @@ ORDER BY created_at DESC
 
 func (p *Postgres) GetApproval(ctx context.Context, id string) (domain.ApprovalRequest, error) {
 	row := p.db.QueryRow(ctx, `
-SELECT id, run_id, workspace_id, status, reason, decision_note, requested_by_surface, requested_by_agent, created_at, decided_at
+SELECT id, run_id, workspace_id, step_index, status, reason, decision_note, requested_by_surface, requested_by_agent, created_at, decided_at
 FROM approval_requests WHERE id = $1
 `, id)
 	out, err := scanApproval(row)
 	return out, mapNotFound("approval", err)
 }
 
-func (p *Postgres) UpdateApproval(ctx context.Context, approval domain.ApprovalRequest) (domain.ApprovalRequest, error) {
-	var decidedAt any
-	if !approval.DecidedAt.IsZero() {
-		decidedAt = approval.DecidedAt
-	}
-	_, err := p.db.Exec(ctx, `
+func (p *Postgres) DecideApproval(ctx context.Context, id, status, note string, decidedAt time.Time) (domain.ApprovalRequest, error) {
+	row := p.db.QueryRow(ctx, `
 UPDATE approval_requests
 SET status = $2, decision_note = $3, decided_at = $4
-WHERE id = $1
-`, approval.ID, approval.Status, approval.DecisionNote, decidedAt)
-	return approval, err
+WHERE id = $1 AND status = 'pending'
+RETURNING id, run_id, workspace_id, step_index, status, reason, decision_note, requested_by_surface, requested_by_agent, created_at, decided_at
+`, id, status, note, decidedAt)
+	out, err := scanApproval(row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		// Distinguish a lost race from a missing record.
+		if _, getErr := p.GetApproval(ctx, id); getErr != nil {
+			return domain.ApprovalRequest{}, getErr
+		}
+		return domain.ApprovalRequest{}, ErrNotPending
+	}
+	return out, err
 }
 
 func (p *Postgres) ListPolicies(ctx context.Context, workspaceID string) ([]domain.PolicyRule, error) {
@@ -506,7 +513,7 @@ func (p *Postgres) ListPolicies(ctx context.Context, workspaceID string) ([]doma
 SELECT id, workspace_id, name, action_pattern, approval_required, created_at
 FROM policy_rules
 WHERE workspace_id = '' OR workspace_id = $1
-ORDER BY created_at ASC
+ORDER BY created_at ASC, id ASC
 `, workspaceID)
 	if err != nil {
 		return nil, err
@@ -540,7 +547,7 @@ func (p *Postgres) ListAuditEvents(ctx context.Context, workspaceID, runID strin
 SELECT id, org_id, workspace_id, run_id, approval_request_id, kind, message, payload_json, created_at
 FROM audit_events
 WHERE workspace_id = $1 AND ($2 = '' OR run_id = $2)
-ORDER BY created_at ASC
+ORDER BY created_at ASC, id ASC
 `, workspaceID, runID)
 	if err != nil {
 		return nil, err
@@ -651,7 +658,7 @@ func scanApproval(row scanner) (domain.ApprovalRequest, error) {
 		out       domain.ApprovalRequest
 		decidedAt *time.Time
 	)
-	err := row.Scan(&out.ID, &out.RunID, &out.WorkspaceID, &out.Status, &out.Reason, &out.DecisionNote, &out.RequestedBySurface, &out.RequestedByAgent, &out.CreatedAt, &decidedAt)
+	err := row.Scan(&out.ID, &out.RunID, &out.WorkspaceID, &out.StepIndex, &out.Status, &out.Reason, &out.DecisionNote, &out.RequestedBySurface, &out.RequestedByAgent, &out.CreatedAt, &decidedAt)
 	if err != nil {
 		return out, err
 	}

@@ -3,6 +3,8 @@ package service_test
 import (
 	"context"
 	"errors"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -137,6 +139,45 @@ func TestLoginAndTenantGuards(t *testing.T) {
 	}
 }
 
+func TestLoginUnknownEmailReturnsInvalidCredentials(t *testing.T) {
+	svc := newService(t)
+	if _, err := svc.Login(context.Background(), "nobody@test.local", "whatever", ""); !errors.Is(err, service.ErrInvalidCredentials) {
+		t.Fatalf("expected ErrInvalidCredentials, got %v", err)
+	}
+}
+
+// last_used_at refreshes at most once per touch interval, so steady request
+// traffic does not turn into a token-store write per request.
+func TestAuthenticateThrottlesTokenTouches(t *testing.T) {
+	svc := newService(t)
+	base := time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC)
+	current := base
+	svc.SetNowFunc(func() time.Time { return current })
+
+	session, err := svc.Login(context.Background(), "admin@test.local", "test-password", "throttle-test")
+	if err != nil {
+		t.Fatalf("login: %v", err)
+	}
+
+	current = base.Add(30 * time.Second)
+	principal, err := svc.Authenticate(context.Background(), session.AccessToken)
+	if err != nil {
+		t.Fatalf("authenticate: %v", err)
+	}
+	if !principal.Token.LastUsedAt.Equal(base) {
+		t.Fatalf("touch within the interval must be skipped: expected %v, got %v", base, principal.Token.LastUsedAt)
+	}
+
+	current = base.Add(2 * time.Minute)
+	principal, err = svc.Authenticate(context.Background(), session.AccessToken)
+	if err != nil {
+		t.Fatalf("authenticate: %v", err)
+	}
+	if !principal.Token.LastUsedAt.Equal(current) {
+		t.Fatalf("touch past the interval must persist: expected %v, got %v", current, principal.Token.LastUsedAt)
+	}
+}
+
 func awaitApproval(t *testing.T, svc *service.ControlPlane, orgID, workspaceID, envID string) domain.RunEnvelope {
 	t.Helper()
 	ctx := context.Background()
@@ -186,6 +227,50 @@ func TestDecideApprovalCrossOrgIsForbiddenAndDoesNotMutate(t *testing.T) {
 	}
 }
 
+// Concurrent decisions on one approval must produce exactly one winner and a
+// consistent run state, never duplicate transitions.
+func TestConcurrentApprovalDecisionsHaveOneWinner(t *testing.T) {
+	svc := newService(t)
+	workspace, env := setupWorkspace(t, svc)
+	ctx := context.Background()
+
+	waiting := awaitApproval(t, svc, "org-1", workspace.ID, env.ID)
+	approvalID := waiting.Approvals[0].ID
+
+	const attempts = 8
+	var wins atomic.Int32
+	var wg sync.WaitGroup
+	for i := 0; i < attempts; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err := svc.DecideApproval(ctx, "org-1", approvalID, "approve", "go")
+			switch {
+			case err == nil:
+				wins.Add(1)
+			case errors.Is(err, repo.ErrNotPending):
+			default:
+				t.Errorf("unexpected error: %v", err)
+			}
+		}()
+	}
+	wg.Wait()
+	if wins.Load() != 1 {
+		t.Fatalf("expected exactly one winning decision, got %d", wins.Load())
+	}
+
+	after, err := svc.GetRunEnvelope(ctx, "org-1", waiting.Run.ID)
+	if err != nil {
+		t.Fatalf("get run: %v", err)
+	}
+	if after.Run.Status != "queued" || after.Run.ApprovalState != "approved" {
+		t.Fatalf("expected queued/approved run, got %s/%s", after.Run.Status, after.Run.ApprovalState)
+	}
+	if after.Approvals[0].Status != "approved" {
+		t.Fatalf("expected approved approval, got %s", after.Approvals[0].Status)
+	}
+}
+
 func TestDecideApprovalRejectsInvalidDecision(t *testing.T) {
 	svc := newService(t)
 	workspace, env := setupWorkspace(t, svc)
@@ -201,6 +286,216 @@ func TestDecideApprovalRejectsInvalidDecision(t *testing.T) {
 	}
 	if after.Approvals[0].Status != "pending" {
 		t.Fatalf("invalid decision must not persist, approval status=%s", after.Approvals[0].Status)
+	}
+}
+
+func newServiceWithCatalog(t *testing.T, cat catalog.Catalog) (*service.ControlPlane, *repo.Memory) {
+	t.Helper()
+	store, err := storage.NewFS(t.TempDir())
+	if err != nil {
+		t.Fatalf("storage: %v", err)
+	}
+	mem := repo.NewMemory()
+	svc := service.New(mem, store, cat, domain.Org{
+		ID:        "org-1",
+		Name:      "Test Org",
+		Slug:      "test-org",
+		CreatedAt: time.Now().UTC(),
+	})
+	if err := svc.Bootstrap(context.Background()); err != nil {
+		t.Fatalf("bootstrap: %v", err)
+	}
+	return svc, mem
+}
+
+func pendingApproval(t *testing.T, env domain.RunEnvelope) domain.ApprovalRequest {
+	t.Helper()
+	for _, approval := range env.Approvals {
+		if approval.Status == "pending" {
+			return approval
+		}
+	}
+	t.Fatalf("no pending approval in envelope (have %d approvals)", len(env.Approvals))
+	return domain.ApprovalRequest{}
+}
+
+// A runbook with two approval steps must gate on each of them; the first
+// decision must not satisfy the second gate.
+func TestRunbookWithTwoApprovalStepsGatesTwice(t *testing.T) {
+	cat := catalog.Catalog{
+		Version: 1,
+		Runbooks: []domain.Runbook{{
+			Slug:             "dual-gate",
+			Title:            "Dual Gate",
+			Family:           "test",
+			ApprovalRequired: true,
+			Steps: []domain.RunbookStep{
+				{Slug: "draft", Kind: "artifact"},
+				{Slug: "first-gate", Kind: "approval"},
+				{Slug: "apply", Kind: "write"},
+				{Slug: "second-gate", Kind: "approval"},
+				{Slug: "finalize", Kind: "write"},
+			},
+		}},
+	}
+	svc, _ := newServiceWithCatalog(t, cat)
+	ctx := context.Background()
+	workspace, err := svc.CreateWorkspace(ctx, "org-1", "Ops", "ops", "")
+	if err != nil {
+		t.Fatalf("workspace: %v", err)
+	}
+
+	run, err := svc.CreateRun(ctx, "org-1", workspace.ID, "", "dual-gate", domain.Actor{Surface: "test", Agent: "test"}, nil)
+	if err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+
+	if _, err := svc.ProcessNextRun(ctx); err != nil {
+		t.Fatalf("process to first gate: %v", err)
+	}
+	atFirst, err := svc.GetRunEnvelope(ctx, "org-1", run.Run.ID)
+	if err != nil {
+		t.Fatalf("get run: %v", err)
+	}
+	if atFirst.Run.Status != "awaiting_approval" || atFirst.Run.CurrentStep != 1 {
+		t.Fatalf("expected run parked at step 1, got status=%s step=%d", atFirst.Run.Status, atFirst.Run.CurrentStep)
+	}
+	first := pendingApproval(t, atFirst)
+	if first.StepIndex != 1 {
+		t.Fatalf("expected first approval scoped to step 1, got %d", first.StepIndex)
+	}
+
+	if _, err := svc.DecideApproval(ctx, "org-1", first.ID, "approve", "gate one"); err != nil {
+		t.Fatalf("approve first gate: %v", err)
+	}
+	if _, err := svc.ProcessNextRun(ctx); err != nil {
+		t.Fatalf("process to second gate: %v", err)
+	}
+	atSecond, err := svc.GetRunEnvelope(ctx, "org-1", run.Run.ID)
+	if err != nil {
+		t.Fatalf("get run: %v", err)
+	}
+	if atSecond.Run.Status != "awaiting_approval" || atSecond.Run.CurrentStep != 3 {
+		t.Fatalf("second gate must park the run again, got status=%s step=%d", atSecond.Run.Status, atSecond.Run.CurrentStep)
+	}
+	second := pendingApproval(t, atSecond)
+	if second.StepIndex != 3 {
+		t.Fatalf("expected second approval scoped to step 3, got %d", second.StepIndex)
+	}
+	if second.ID == first.ID {
+		t.Fatalf("second gate must create its own approval request")
+	}
+
+	if _, err := svc.DecideApproval(ctx, "org-1", second.ID, "approve", "gate two"); err != nil {
+		t.Fatalf("approve second gate: %v", err)
+	}
+	if _, err := svc.ProcessNextRun(ctx); err != nil {
+		t.Fatalf("process to completion: %v", err)
+	}
+	done, err := svc.GetRunEnvelope(ctx, "org-1", run.Run.ID)
+	if err != nil {
+		t.Fatalf("get run: %v", err)
+	}
+	if done.Run.Status != "completed" {
+		t.Fatalf("expected completed run, got %s", done.Run.Status)
+	}
+}
+
+// Approvals persisted before step scoping carry step_index 0; the worker must
+// still honor them for the runbook's first approval step after an upgrade.
+func TestLegacyApprovalWithoutStepIndexIsStillConsumed(t *testing.T) {
+	cat, err := catalog.Load("../../../../catalog/runbooks.json")
+	if err != nil {
+		t.Fatalf("load catalog: %v", err)
+	}
+	svc, mem := newServiceWithCatalog(t, cat)
+	ctx := context.Background()
+	workspace, err := svc.CreateWorkspace(ctx, "org-1", "Ops", "ops", "")
+	if err != nil {
+		t.Fatalf("workspace: %v", err)
+	}
+
+	// release-coordination parks at step 2 (request-rollout-approval). Seed a
+	// pre-upgrade run that was already approved and re-queued, plus its
+	// legacy approval with the zero step index.
+	now := time.Now().UTC()
+	run := domain.TaskRun{
+		ID:                 "legacy-run",
+		OrgID:              "org-1",
+		WorkspaceID:        workspace.ID,
+		RunbookSlug:        "release-coordination",
+		Status:             "queued",
+		CurrentStep:        2,
+		ApprovalState:      "approved",
+		RequestedBySurface: "api",
+		RequestedByAgent:   "human",
+		CreatedAt:          now,
+		UpdatedAt:          now,
+	}
+	if _, err := mem.CreateTaskRun(ctx, run); err != nil {
+		t.Fatalf("seed run: %v", err)
+	}
+	if _, err := mem.CreateApproval(ctx, domain.ApprovalRequest{
+		ID:          "legacy-approval",
+		RunID:       run.ID,
+		WorkspaceID: workspace.ID,
+		StepIndex:   0,
+		Status:      "approved",
+		Reason:      "legacy",
+		CreatedAt:   now,
+		DecidedAt:   now,
+	}); err != nil {
+		t.Fatalf("seed approval: %v", err)
+	}
+
+	if _, err := svc.ProcessNextRun(ctx); err != nil {
+		t.Fatalf("process legacy run: %v", err)
+	}
+	after, err := svc.GetRunEnvelope(ctx, "org-1", run.ID)
+	if err != nil {
+		t.Fatalf("get run: %v", err)
+	}
+	if after.Run.Status != "completed" {
+		t.Fatalf("legacy approval must satisfy the gate, got status=%s", after.Run.Status)
+	}
+	if len(after.Approvals) != 1 {
+		t.Fatalf("no new approval may be created for a legacy-approved run, got %d", len(after.Approvals))
+	}
+}
+
+// A run whose runbook has been removed from the catalog must not surface an
+// empty Runbook{} masquerading as a real definition.
+func TestRunEnvelopeOmitsRunbookMissingFromCatalog(t *testing.T) {
+	cat, err := catalog.Load("../../../../catalog/runbooks.json")
+	if err != nil {
+		t.Fatalf("load catalog: %v", err)
+	}
+	svc, mem := newServiceWithCatalog(t, cat)
+	ctx := context.Background()
+	workspace, err := svc.CreateWorkspace(ctx, "org-1", "Ops", "ops", "")
+	if err != nil {
+		t.Fatalf("workspace: %v", err)
+	}
+
+	now := time.Now().UTC()
+	if _, err := mem.CreateTaskRun(ctx, domain.TaskRun{
+		ID:          "orphan-run",
+		OrgID:       "org-1",
+		WorkspaceID: workspace.ID,
+		RunbookSlug: "retired-runbook",
+		Status:      "completed",
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}); err != nil {
+		t.Fatalf("seed run: %v", err)
+	}
+
+	envelope, err := svc.GetRunEnvelope(ctx, "org-1", "orphan-run")
+	if err != nil {
+		t.Fatalf("get run: %v", err)
+	}
+	if envelope.Runbook != nil {
+		t.Fatalf("expected nil runbook for retired slug, got %+v", envelope.Runbook)
 	}
 }
 

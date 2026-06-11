@@ -1,12 +1,14 @@
 package api_test
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -200,6 +202,91 @@ func TestRunLifecycleOverHTTP(t *testing.T) {
 	events := client.mustDo(http.MethodGet, "/v1/audit-events?workspace_id="+workspaceID+"&run_id="+runID, nil, http.StatusOK)
 	if eventItems, _ := events["items"].([]any); len(eventItems) == 0 {
 		t.Fatalf("expected audit events, got %v", events)
+	}
+}
+
+// The SSE stream must deliver every audit event exactly once and close with a
+// terminal done event.
+func TestRunStreamDeliversEachEventOnceThenDone(t *testing.T) {
+	server, svc := newTestServer(t)
+	client := login(t, server)
+	ctx := context.Background()
+
+	workspace := client.mustDo(http.MethodPost, "/v1/workspaces", map[string]string{
+		"name": "Stream", "slug": "stream",
+	}, http.StatusCreated)
+	workspaceID, _ := itemField(t, workspace, "item", "id").(string)
+
+	created := client.mustDo(http.MethodPost, "/v1/runs", map[string]any{
+		"workspace_id": workspaceID,
+		"runbook_slug": "compliance-pack",
+	}, http.StatusCreated)
+	runID, _ := itemField(t, created, "item", "run", "id").(string)
+
+	if _, err := svc.ProcessNextRun(ctx); err != nil {
+		t.Fatalf("process run: %v", err)
+	}
+
+	events := client.mustDo(http.MethodGet, "/v1/audit-events?workspace_id="+workspaceID+"&run_id="+runID, nil, http.StatusOK)
+	eventItems, _ := events["items"].([]any)
+	if len(eventItems) == 0 {
+		t.Fatalf("expected audit events before streaming")
+	}
+
+	req, err := http.NewRequest(http.MethodGet, server.URL+"/v1/runs/"+runID+"/stream", nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+client.token)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("stream request: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("stream: expected 200, got %d", resp.StatusCode)
+	}
+
+	seen := map[string]int{}
+	sawDone := false
+	scanner := bufio.NewScanner(resp.Body)
+	currentEvent := ""
+	for scanner.Scan() {
+		line := scanner.Text()
+		switch {
+		case strings.HasPrefix(line, "event: "):
+			currentEvent = strings.TrimPrefix(line, "event: ")
+		case strings.HasPrefix(line, "data: "):
+			payload := strings.TrimPrefix(line, "data: ")
+			if currentEvent == "audit" {
+				var event map[string]any
+				if err := json.Unmarshal([]byte(payload), &event); err != nil {
+					t.Fatalf("decode audit event: %v", err)
+				}
+				id, _ := event["id"].(string)
+				seen[id]++
+			}
+			if currentEvent == "done" {
+				if !strings.Contains(payload, "completed") {
+					t.Fatalf("expected completed status in done event, got %s", payload)
+				}
+				sawDone = true
+			}
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		t.Fatalf("read stream: %v", err)
+	}
+	if !sawDone {
+		t.Fatalf("stream ended without a done event")
+	}
+	if len(seen) != len(eventItems) {
+		t.Fatalf("expected %d distinct events, got %d", len(eventItems), len(seen))
+	}
+	for id, count := range seen {
+		if count != 1 {
+			t.Fatalf("event %s delivered %d times", id, count)
+		}
 	}
 }
 

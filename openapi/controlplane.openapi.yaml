@@ -579,6 +579,7 @@ components:
         - id
         - run_id
         - workspace_id
+        - step_index
         - status
         - reason
         - requested_by_surface
@@ -588,6 +589,9 @@ components:
         id: { type: string }
         run_id: { type: string }
         workspace_id: { type: string }
+        step_index:
+          type: integer
+          description: Index of the runbook step this approval gates.
         status: { type: string }
         reason: { type: string }
         decision_note: { type: string }

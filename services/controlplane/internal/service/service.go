@@ -26,6 +26,16 @@ var (
 	ErrInvalidCredentials = errors.New("invalid credentials")
 )
 
+// dummyPasswordHash is a bcrypt hash of a discarded random value; no password
+// can match it. Login compares against it when the email is unknown so the
+// endpoint takes the same time either way and cannot be used to enumerate
+// accounts.
+var dummyPasswordHash = []byte("$2a$10$l98CrjpqOqSODk.ZaJF1U.CgQn6F2fdCm5nr7Qr0EtEIwAjij3fhG")
+
+// tokenTouchInterval bounds how often Authenticate persists last_used_at; a
+// write per authenticated request is needless load on the token store.
+const tokenTouchInterval = time.Minute
+
 type ControlPlane struct {
 	repo                   repo.Repository
 	store                  storage.Store
@@ -45,6 +55,12 @@ func New(repository repo.Repository, store storage.Store, catalog catalog.Catalo
 		defaultOrg: defaultOrg,
 		now:        func() time.Time { return time.Now().UTC() },
 	}
+}
+
+// SetNowFunc overrides the service clock; tests use it to make
+// time-dependent behavior deterministic.
+func (s *ControlPlane) SetNowFunc(now func() time.Time) {
+	s.now = now
 }
 
 func (s *ControlPlane) ConfigureBootstrapAdmin(email, password, displayName string) {
@@ -107,6 +123,7 @@ func (s *ControlPlane) DefaultOrg() domain.Org { return s.defaultOrg }
 func (s *ControlPlane) Login(ctx context.Context, email, password, label string) (domain.AuthSession, error) {
 	user, err := s.repo.GetUserByEmail(ctx, strings.TrimSpace(strings.ToLower(email)))
 	if err != nil {
+		_ = bcrypt.CompareHashAndPassword(dummyPasswordHash, []byte(password))
 		return domain.AuthSession{}, ErrInvalidCredentials
 	}
 	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(password)); err != nil {
@@ -132,9 +149,11 @@ func (s *ControlPlane) Authenticate(ctx context.Context, rawToken string) (domai
 	if err != nil {
 		return domain.AuthPrincipal{}, ErrUnauthorized
 	}
-	token.LastUsedAt = s.now()
-	if err := s.repo.TouchAuthToken(ctx, token.ID, token.AuthToken); err != nil {
-		return domain.AuthPrincipal{}, err
+	if now := s.now(); now.Sub(token.LastUsedAt) >= tokenTouchInterval {
+		token.LastUsedAt = now
+		if err := s.repo.TouchAuthToken(ctx, token.ID, token.AuthToken); err != nil {
+			return domain.AuthPrincipal{}, err
+		}
 	}
 	user, err := s.repo.GetUserByID(ctx, token.UserID)
 	if err != nil {
@@ -341,13 +360,18 @@ func (s *ControlPlane) GetRunEnvelope(ctx context.Context, orgID, runID string) 
 	if err != nil {
 		return domain.RunEnvelope{}, err
 	}
-	runbook, _ := s.catalog.Runbook(run.RunbookSlug)
+	// Omit the runbook entirely when the catalog no longer carries the slug;
+	// an empty Runbook{} in the payload would masquerade as a real one.
+	var runbookRef *domain.Runbook
+	if runbook, ok := s.catalog.Runbook(run.RunbookSlug); ok {
+		runbookRef = &runbook
+	}
 	return domain.RunEnvelope{
 		Run:       run,
 		Approvals: filteredApprovals,
 		Artifacts: artifacts,
 		Events:    events,
-		Runbook:   &runbook,
+		Runbook:   runbookRef,
 	}, nil
 }
 
@@ -402,21 +426,20 @@ func (s *ControlPlane) DecideApproval(ctx context.Context, orgID, approvalID, de
 	if run.OrgID != orgID {
 		return domain.RunEnvelope{}, ErrForbidden
 	}
-	if approval.Status != "pending" {
-		return domain.RunEnvelope{}, errors.New("approval is not pending")
-	}
-	now := s.now()
+	var status string
 	switch decision {
 	case "approve":
-		approval.Status = "approved"
+		status = "approved"
 	case "reject":
-		approval.Status = "rejected"
+		status = "rejected"
 	default:
 		return domain.RunEnvelope{}, errors.New("decision must be approve or reject")
 	}
-	approval.DecisionNote = strings.TrimSpace(note)
-	approval.DecidedAt = now
-	if _, err := s.repo.UpdateApproval(ctx, approval); err != nil {
+	now := s.now()
+	// The repository transition is compare-and-swap on the pending status, so
+	// concurrent decisions cannot both win.
+	approval, err = s.repo.DecideApproval(ctx, approvalID, status, strings.TrimSpace(note), now)
+	if err != nil {
 		return domain.RunEnvelope{}, err
 	}
 	if approval.Status == "approved" {
@@ -555,7 +578,7 @@ func (s *ControlPlane) processRun(ctx context.Context, run domain.TaskRun) error
 			}
 			run.CurrentStep++
 		case "approval":
-			approval, found, err := s.findApproval(ctx, run)
+			approval, found, err := s.findApproval(ctx, run, runbook)
 			if err != nil {
 				return err
 			}
@@ -564,6 +587,7 @@ func (s *ControlPlane) processRun(ctx context.Context, run domain.TaskRun) error
 					ID:                 uuid.NewString(),
 					RunID:              run.ID,
 					WorkspaceID:        run.WorkspaceID,
+					StepIndex:          run.CurrentStep,
 					Status:             "pending",
 					Reason:             "Approval required for " + runbook.Title,
 					RequestedBySurface: run.RequestedBySurface,
@@ -622,17 +646,35 @@ func (s *ControlPlane) processRun(ctx context.Context, run domain.TaskRun) error
 	return s.appendEvent(ctx, run, "run.completed", "Run completed", map[string]any{"runbook_slug": run.RunbookSlug})
 }
 
-func (s *ControlPlane) findApproval(ctx context.Context, run domain.TaskRun) (domain.ApprovalRequest, bool, error) {
+// findApproval looks up the approval gating the run's current step. Each
+// approval step owns its own request, so a runbook with several approval
+// steps gates on every one of them instead of reusing the first decision.
+func (s *ControlPlane) findApproval(ctx context.Context, run domain.TaskRun, runbook domain.Runbook) (domain.ApprovalRequest, bool, error) {
 	approvals, err := s.repo.ListApprovals(ctx, run.WorkspaceID)
 	if err != nil {
 		return domain.ApprovalRequest{}, false, err
 	}
+	// Approvals created before step scoping carry index 0; they can only
+	// belong to the runbook's first approval step.
+	legacyMatch := run.CurrentStep == firstApprovalStepIndex(runbook)
 	for _, approval := range approvals {
-		if approval.RunID == run.ID {
+		if approval.RunID != run.ID {
+			continue
+		}
+		if approval.StepIndex == run.CurrentStep || (approval.StepIndex == 0 && legacyMatch) {
 			return approval, true, nil
 		}
 	}
 	return domain.ApprovalRequest{}, false, nil
+}
+
+func firstApprovalStepIndex(runbook domain.Runbook) int {
+	for i, step := range runbook.Steps {
+		if step.Kind == "approval" {
+			return i
+		}
+	}
+	return -1
 }
 
 func (s *ControlPlane) createArtifact(ctx context.Context, run domain.TaskRun, runbook domain.Runbook, step domain.RunbookStep) (domain.Artifact, error) {

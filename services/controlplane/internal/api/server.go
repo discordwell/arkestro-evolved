@@ -340,9 +340,16 @@ func (s *Server) handleRunStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	lastSent := 0
+	// Dedupe by event ID rather than slicing by index: list ordering for
+	// events with identical timestamps is not guaranteed to be stable between
+	// polls, and index slicing would then drop or repeat events.
+	sent := make(map[string]struct{})
 	send := func(events []domain.AuditEvent) error {
+		wrote := false
 		for _, event := range events {
+			if _, seen := sent[event.ID]; seen {
+				continue
+			}
 			raw, err := json.Marshal(event)
 			if err != nil {
 				return err
@@ -350,14 +357,20 @@ func (s *Server) handleRunStream(w http.ResponseWriter, r *http.Request) {
 			if _, err := fmt.Fprintf(w, "event: audit\ndata: %s\n\n", raw); err != nil {
 				return err
 			}
-			lastSent++
+			sent[event.ID] = struct{}{}
+			wrote = true
 		}
-		flush.Flush()
+		if wrote {
+			flush.Flush()
+		}
 		return nil
 	}
 	if err := send(env.Events); err != nil {
 		return
 	}
+	// Flush headers right away so clients see the stream open even when the
+	// run has produced no events yet.
+	flush.Flush()
 
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
@@ -371,10 +384,8 @@ func (s *Server) handleRunStream(w http.ResponseWriter, r *http.Request) {
 			if err != nil {
 				return
 			}
-			if len(runEnv.Events) > lastSent {
-				if err := send(runEnv.Events[lastSent:]); err != nil {
-					return
-				}
+			if err := send(runEnv.Events); err != nil {
+				return
 			}
 			if runEnv.Run.Status == "completed" || runEnv.Run.Status == "failed" || runEnv.Run.Status == "rejected" {
 				_, _ = fmt.Fprintf(w, "event: done\ndata: {\"status\":%q}\n\n", runEnv.Run.Status)
