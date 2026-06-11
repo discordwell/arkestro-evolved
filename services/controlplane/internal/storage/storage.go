@@ -29,8 +29,22 @@ func NewFS(root string) (*FSStore, error) {
 	return &FSStore{root: root}, nil
 }
 
+// path resolves a slash-separated storage key under the artifact root. A key
+// that is empty, absolute, or escapes the root via ".." is never legitimate,
+// so it is rejected rather than resolved.
+func (s *FSStore) path(key string) (string, error) {
+	local := filepath.FromSlash(key)
+	if key == "" || !filepath.IsLocal(local) {
+		return "", fmt.Errorf("invalid storage key %q", key)
+	}
+	return filepath.Join(s.root, local), nil
+}
+
 func (s *FSStore) Put(_ context.Context, key string, body []byte, _ string) error {
-	path := filepath.Join(s.root, key)
+	path, err := s.path(key)
+	if err != nil {
+		return err
+	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
@@ -38,7 +52,11 @@ func (s *FSStore) Put(_ context.Context, key string, body []byte, _ string) erro
 }
 
 func (s *FSStore) Get(_ context.Context, key string) ([]byte, error) {
-	return os.ReadFile(filepath.Join(s.root, key))
+	path, err := s.path(key)
+	if err != nil {
+		return nil, err
+	}
+	return os.ReadFile(path)
 }
 
 type S3Store struct {

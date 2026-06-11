@@ -365,12 +365,23 @@ func (s *Server) handleRunStream(w http.ResponseWriter, r *http.Request) {
 		}
 		return nil
 	}
+	sendDone := func(status string) {
+		_, _ = fmt.Fprintf(w, "event: done\ndata: {\"status\":%q}\n\n", status)
+		flush.Flush()
+	}
+
 	if err := send(env.Events); err != nil {
 		return
 	}
 	// Flush headers right away so clients see the stream open even when the
 	// run has produced no events yet.
 	flush.Flush()
+	// A run that is already terminal closes immediately instead of making the
+	// client wait out a poll tick for the done event.
+	if isTerminalRunStatus(env.Run.Status) {
+		sendDone(env.Run.Status)
+		return
+	}
 
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
@@ -387,13 +398,16 @@ func (s *Server) handleRunStream(w http.ResponseWriter, r *http.Request) {
 			if err := send(runEnv.Events); err != nil {
 				return
 			}
-			if runEnv.Run.Status == "completed" || runEnv.Run.Status == "failed" || runEnv.Run.Status == "rejected" {
-				_, _ = fmt.Fprintf(w, "event: done\ndata: {\"status\":%q}\n\n", runEnv.Run.Status)
-				flush.Flush()
+			if isTerminalRunStatus(runEnv.Run.Status) {
+				sendDone(runEnv.Run.Status)
 				return
 			}
 		}
 	}
+}
+
+func isTerminalRunStatus(status string) bool {
+	return status == "completed" || status == "failed" || status == "rejected"
 }
 
 func (s *Server) orgID(r *http.Request) string {

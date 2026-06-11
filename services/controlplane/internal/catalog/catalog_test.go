@@ -62,6 +62,27 @@ func TestValidateRejectsBrokenCatalogs(t *testing.T) {
 			wantErr: "duplicate runbook slug",
 		},
 		{
+			name: "runbook slug with unsafe characters",
+			mutate: func(c *catalog.Catalog) {
+				c.Runbooks[0].Slug = "../escape"
+			},
+			wantErr: "lowercase letters, digits, and hyphens",
+		},
+		{
+			name: "step slug with path separator",
+			mutate: func(c *catalog.Catalog) {
+				c.Runbooks[0].Steps[0].Slug = "nested/step"
+			},
+			wantErr: "lowercase letters, digits, and hyphens",
+		},
+		{
+			name: "uppercase step slug",
+			mutate: func(c *catalog.Catalog) {
+				c.Runbooks[0].Steps[0].Slug = "Collect"
+			},
+			wantErr: "lowercase letters, digits, and hyphens",
+		},
+		{
 			name: "missing title",
 			mutate: func(c *catalog.Catalog) {
 				c.Runbooks[0].Title = ""

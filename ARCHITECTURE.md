@@ -25,7 +25,8 @@ client over the HTTP API.
 
 - `api` — chi router, bearer-token auth middleware, JSON handlers, SSE run
   stream (dedupes by audit-event ID, so reordered polls never drop or repeat
-  events).
+  events; a run that is already terminal closes the stream immediately
+  instead of waiting out a poll tick).
 - `service` — the `ControlPlane` orchestrator: auth, tenancy checks, run
   lifecycle, approval decisions, artifact creation, audit events.
 - `repo` — `Repository` interface with two implementations: `Memory` (tests)
@@ -34,10 +35,13 @@ client over the HTTP API.
   results order deterministically by `(created_at, id)` — runs and approvals
   newest first, everything else oldest first — identically in both backends.
 - `storage` — artifact object store: filesystem (default) or S3-compatible.
+  The filesystem store rejects keys that are empty, absolute, or escape the
+  artifact root via `..`.
 - `catalog` — loads the runbook catalog JSON and validates it at boot (unique
-  runbook/step slugs, known step kinds, `approval_required` consistent with
-  the presence of approval steps), so a broken catalog cannot fail runs
-  mid-execution.
+  lowercase-kebab runbook/step slugs, known step kinds, `approval_required`
+  consistent with the presence of approval steps), so a broken catalog cannot
+  fail runs mid-execution. Step slugs become artifact file names, so the slug
+  charset is what keeps storage keys path-safe.
 - `worker` — polling loop that claims queued runs and executes runbook steps.
   The queue drains without waiting while claims succeed; after an error or an
   idle poll the worker waits one poll interval, so a persistent failure (e.g.

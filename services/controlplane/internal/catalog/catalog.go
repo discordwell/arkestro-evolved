@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"regexp"
 
 	"github.com/discordwell/evo-control-plane/services/controlplane/internal/domain"
 )
@@ -37,6 +38,11 @@ var validStepKinds = map[string]bool{
 	"write":    true,
 }
 
+// slugPattern constrains runbook and step slugs to URL- and filesystem-safe
+// names: step slugs become artifact file names under the object-store root,
+// so path separators, "..", and uppercase are all unsafe.
+var slugPattern = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
+
 // Validate checks the structural invariants the worker relies on, so a broken
 // catalog fails at boot instead of failing runs mid-execution.
 func (c Catalog) Validate() error {
@@ -47,6 +53,9 @@ func (c Catalog) Validate() error {
 	for _, runbook := range c.Runbooks {
 		if runbook.Slug == "" {
 			return errors.New("runbook slug is required")
+		}
+		if !slugPattern.MatchString(runbook.Slug) {
+			return fmt.Errorf("runbook slug %q must be lowercase letters, digits, and hyphens", runbook.Slug)
 		}
 		if slugs[runbook.Slug] {
 			return fmt.Errorf("duplicate runbook slug %q", runbook.Slug)
@@ -63,6 +72,9 @@ func (c Catalog) Validate() error {
 		for i, step := range runbook.Steps {
 			if step.Slug == "" {
 				return fmt.Errorf("runbook %q: step %d: slug is required", runbook.Slug, i)
+			}
+			if !slugPattern.MatchString(step.Slug) {
+				return fmt.Errorf("runbook %q: step slug %q must be lowercase letters, digits, and hyphens", runbook.Slug, step.Slug)
 			}
 			if stepSlugs[step.Slug] {
 				return fmt.Errorf("runbook %q: duplicate step slug %q", runbook.Slug, step.Slug)

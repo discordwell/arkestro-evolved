@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -287,6 +288,55 @@ func TestRunStreamDeliversEachEventOnceThenDone(t *testing.T) {
 		if count != 1 {
 			t.Fatalf("event %s delivered %d times", id, count)
 		}
+	}
+}
+
+// Streaming a run that is already terminal must close with done immediately,
+// not after a poll tick. Pre-fix the handler always waited out one full
+// 1-second ticker period before emitting done, so the 900ms bound
+// discriminates while leaving wide margin for a slow machine.
+func TestRunStreamClosesImmediatelyForTerminalRun(t *testing.T) {
+	server, svc := newTestServer(t)
+	client := login(t, server)
+	ctx := context.Background()
+
+	workspace := client.mustDo(http.MethodPost, "/v1/workspaces", map[string]string{
+		"name": "Prompt", "slug": "prompt",
+	}, http.StatusCreated)
+	workspaceID, _ := itemField(t, workspace, "item", "id").(string)
+
+	created := client.mustDo(http.MethodPost, "/v1/runs", map[string]any{
+		"workspace_id": workspaceID,
+		"runbook_slug": "compliance-pack",
+	}, http.StatusCreated)
+	runID, _ := itemField(t, created, "item", "run", "id").(string)
+	if _, err := svc.ProcessNextRun(ctx); err != nil {
+		t.Fatalf("process run: %v", err)
+	}
+
+	req, err := http.NewRequest(http.MethodGet, server.URL+"/v1/runs/"+runID+"/stream", nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+client.token)
+
+	start := time.Now()
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("stream request: %v", err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read stream: %v", err)
+	}
+	elapsed := time.Since(start)
+
+	if !strings.Contains(string(body), "event: done") {
+		t.Fatalf("expected done event, got:\n%s", body)
+	}
+	if elapsed >= 900*time.Millisecond {
+		t.Fatalf("stream of a terminal run took %v; must close without waiting for a poll tick", elapsed)
 	}
 }
 
