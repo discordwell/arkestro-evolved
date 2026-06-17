@@ -99,6 +99,14 @@ Handlers return Go errors; `api.statusForError` maps them: `ErrUnauthorized` /
 `ErrInvalidCredentials` → 401, `ErrForbidden` → 403, `repo.ErrNotFound` → 404,
 anything else → 400.
 
+The TypeScript SDK preserves that status on the way back out: a non-2xx
+response is thrown as an `EvoApiError` carrying the numeric `status` (plus the
+decoded body), not just a formatted message string. Surfaces that re-expose the
+API rely on this — the ChatGPT companion maps `EvoApiError.status` straight onto
+its own response, so an upstream 401 (bad token) or 404 (missing run) reaches
+the caller as that status instead of being flattened to 500; only genuinely
+unexpected (non-API) errors become 500.
+
 ## Testing
 
 - `make test` runs both suites; `make test-go` / `make test-ts` individually.

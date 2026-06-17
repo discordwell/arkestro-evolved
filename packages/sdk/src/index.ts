@@ -50,6 +50,26 @@ type ListEnvelope<T> = { items: T[] };
 
 const DEFAULT_BASE_URL = process.env.EVO_API_BASE_URL || "http://127.0.0.1:8080";
 
+// EvoApiError is thrown for every non-2xx control-plane response. It keeps the
+// numeric HTTP status (and the decoded error body) so callers that re-expose
+// the API — the ChatGPT companion, future proxies — can map an upstream 401 or
+// 404 back onto their own response instead of flattening everything to 500.
+// The message keeps the `"<status> <statusText>: <message>"` shape it always
+// had, so existing string-matching callers are unaffected.
+export class EvoApiError extends Error {
+  readonly status: number;
+  readonly statusText: string;
+  readonly body: unknown;
+
+  constructor(status: number, statusText: string, message: string, body: unknown) {
+    super(`${status} ${statusText}: ${message}`);
+    this.name = "EvoApiError";
+    this.status = status;
+    this.statusText = statusText;
+    this.body = body;
+  }
+}
+
 export class EvoClient {
   readonly baseUrl: string;
   readonly accessToken?: string;
@@ -263,9 +283,8 @@ export class EvoClient {
     throw this.toError(response, error);
   }
 
-  private toError(response: Response, error: unknown): Error {
-    const message = this.errorMessage(error);
-    return new Error(`${response.status} ${response.statusText}: ${message}`);
+  private toError(response: Response, error: unknown): EvoApiError {
+    return new EvoApiError(response.status, response.statusText, this.errorMessage(error), error);
   }
 
   private errorMessage(error: unknown): string {

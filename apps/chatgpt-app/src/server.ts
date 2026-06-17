@@ -1,5 +1,5 @@
 import express from "express";
-import { EvoClient } from "@evo/sdk";
+import { EvoApiError, EvoClient } from "@evo/sdk";
 
 const DEFAULT_MCP_URL = process.env.EVO_MCP_HTTP_URL || "http://127.0.0.1:3301/mcp";
 
@@ -12,7 +12,11 @@ export function bearerToken(header: string | undefined): string {
   return token.trim();
 }
 
-function clientForToken(accessToken?: string, surface = "chatgpt-app"): EvoClient {
+// ClientFactory builds the upstream SDK client for a request. createApp accepts
+// one so tests can drive the proxy with a stub instead of a live control plane.
+export type ClientFactory = (accessToken?: string, surface?: string) => EvoClient;
+
+function defaultClientForToken(accessToken?: string, surface = "chatgpt-app"): EvoClient {
   return new EvoClient({
     accessToken: accessToken || process.env.EVO_CHATGPT_APP_TOKEN || process.env.EVO_API_TOKEN,
     actorSurface: surface,
@@ -20,6 +24,11 @@ function clientForToken(accessToken?: string, surface = "chatgpt-app"): EvoClien
   });
 }
 
+// The companion can hold a service credential (EVO_CHATGPT_APP_TOKEN /
+// EVO_API_TOKEN), in which case it runs as that fixed principal and per-request
+// bearer tokens are optional. With no service token configured, a request must
+// carry its own bearer token. Either way the control plane is the authority
+// that validates the token and enforces tenancy.
 function requireAuth(req: express.Request, res: express.Response, next: express.NextFunction): void {
   if (bearerToken(req.header("authorization")) || process.env.EVO_CHATGPT_APP_TOKEN || process.env.EVO_API_TOKEN) {
     next();
@@ -28,7 +37,7 @@ function requireAuth(req: express.Request, res: express.Response, next: express.
   res.status(401).json({ error: "missing bearer token" });
 }
 
-export function createApp(): express.Express {
+export function createApp(clientForToken: ClientFactory = defaultClientForToken): express.Express {
   const app = express();
 
   app.use(express.json());
@@ -131,8 +140,12 @@ export function createApp(): express.Express {
 </html>`);
   });
 
+  // Preserve the upstream control-plane status (401, 403, 404, 400, ...) rather
+  // than collapsing every failure to 500: a bad token or a missing run should
+  // reach the caller as that status, not as an internal error.
   app.use((error: Error, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
-    res.status(500).json({ error: error.message });
+    const status = error instanceof EvoApiError ? error.status : 500;
+    res.status(status).json({ error: error.message });
   });
 
   return app;

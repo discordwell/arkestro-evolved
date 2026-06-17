@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { EvoClient } from "./index.js";
+import { EvoApiError, EvoClient } from "./index.js";
 
 test("client uses default headers and base url", () => {
   const client = new EvoClient({ actorAgent: "codex", actorSurface: "cli", accessToken: "token-123" });
@@ -61,4 +61,17 @@ test("API error envelopes surface as an Error with status and message", async ()
 test("errors without an error field fall back to a generic message", async () => {
   const client = clientReturning({}, { status: 500, statusText: "Internal Server Error" });
   await assert.rejects(client.listWorkspaces(), /500 Internal Server Error: request failed/);
+});
+
+test("API errors are EvoApiError carrying the HTTP status and decoded body", async () => {
+  const client = clientReturning({ error: "unauthorized" }, { status: 401, statusText: "Unauthorized" });
+  await assert.rejects(client.me(), (error: unknown) => {
+    assert.ok(error instanceof EvoApiError, "thrown value is an EvoApiError");
+    assert.ok(error instanceof Error, "EvoApiError is still an Error");
+    assert.equal(error.status, 401);
+    assert.equal(error.statusText, "Unauthorized");
+    assert.deepEqual(error.body, { error: "unauthorized" });
+    assert.equal(error.message, "401 Unauthorized: unauthorized");
+    return true;
+  });
 });
