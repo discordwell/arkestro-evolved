@@ -1,16 +1,16 @@
 #!/usr/bin/env node
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { Command } from "commander";
 import { EvoClient, type ArtifactDocument, type RunEnvelope } from "@evo/sdk";
-
-interface StoredAuth {
-  baseUrl: string;
-  accessToken: string;
-  userEmail?: string;
-  tokenPreview?: string;
-}
+import {
+  authFilePath,
+  clearStoredAuth,
+  parseContext,
+  parseIntervalMs,
+  readStoredAuth,
+  resolveClientOptions,
+  watchRunLoop,
+  writeStoredAuth
+} from "./lib.js";
 
 function output(value: unknown, asJSON: boolean): void {
   if (asJSON) {
@@ -20,55 +20,17 @@ function output(value: unknown, asJSON: boolean): void {
   console.dir(value, { depth: null, colors: true });
 }
 
-function parseContext(values: string[]): Record<string, string> {
-  return values.reduce<Record<string, string>>((acc, entry) => {
-    const [key, ...rest] = entry.split("=");
-    if (key) acc[key] = rest.join("=") || "";
-    return acc;
-  }, {});
-}
-
-function authFilePath(): string {
-  const configRoot = process.env.XDG_CONFIG_HOME || path.join(os.homedir(), ".config");
-  return path.join(configRoot, "evo", "auth.json");
-}
-
-async function readStoredAuth(): Promise<StoredAuth | null> {
-  try {
-    const raw = await readFile(authFilePath(), "utf8");
-    return JSON.parse(raw) as StoredAuth;
-  } catch {
-    return null;
-  }
-}
-
-async function writeStoredAuth(auth: StoredAuth): Promise<void> {
-  await mkdir(path.dirname(authFilePath()), { recursive: true });
-  await writeFile(authFilePath(), `${JSON.stringify(auth, null, 2)}\n`, "utf8");
-}
-
-async function clearStoredAuth(): Promise<void> {
-  await rm(authFilePath(), { force: true });
-}
-
 async function createClient(): Promise<EvoClient> {
-  const stored = await readStoredAuth();
-  return new EvoClient({
-    baseUrl: process.env.EVO_API_BASE_URL || stored?.baseUrl,
-    accessToken: process.env.EVO_API_TOKEN || stored?.accessToken,
-    actorSurface: "cli",
-    actorAgent: process.env.EVO_ACTOR_AGENT || "human",
-    actorUser: process.env.EVO_ACTOR_USER || stored?.userEmail
-  });
+  const stored = await readStoredAuth(authFilePath());
+  return new EvoClient(resolveClientOptions(process.env, stored));
 }
 
 async function watchRun(client: EvoClient, runId: string, intervalMs: number, asJSON: boolean): Promise<void> {
-  for (;;) {
-    const run = await client.getRun(runId);
-    output(run, asJSON);
-    if (["completed", "failed", "rejected"].includes(run.run.status)) return;
-    await new Promise((resolve) => setTimeout(resolve, intervalMs));
-  }
+  await watchRunLoop<RunEnvelope>({
+    getRun: () => client.getRun(runId),
+    emit: (run) => output(run, asJSON),
+    intervalMs
+  });
 }
 
 const program = new Command();
@@ -79,7 +41,7 @@ auth
   .command("status")
   .option("--json", "machine-readable output")
   .action(async (options) => {
-    const stored = await readStoredAuth();
+    const stored = await readStoredAuth(authFilePath());
     const client = await createClient();
     output({
       baseUrl: client.baseUrl,
@@ -103,7 +65,7 @@ auth
       password: options.password,
       label: options.label
     });
-    await writeStoredAuth({
+    await writeStoredAuth(authFilePath(), {
       baseUrl: client.baseUrl,
       accessToken: session.access_token,
       userEmail: session.user.email,
@@ -124,7 +86,7 @@ auth
   .command("logout")
   .option("--json", "machine-readable output")
   .action(async (options) => {
-    await clearStoredAuth();
+    await clearStoredAuth(authFilePath());
     output({ ok: true, authFile: authFilePath() }, options.json);
   });
 
@@ -227,7 +189,7 @@ run
   .argument("<runId>")
   .option("--interval-ms <ms>", "poll interval", "1000")
   .option("--json", "machine-readable output")
-  .action(async (runId, options) => watchRun(await createClient(), runId, Number(options.intervalMs), options.json));
+  .action(async (runId, options) => watchRun(await createClient(), runId, parseIntervalMs(options.intervalMs), options.json));
 
 const artifact = program.command("artifact").description("Artifact commands");
 artifact
@@ -288,7 +250,7 @@ mcp
   .command("print-config")
   .option("--json", "machine-readable output")
   .action(async (options) => {
-    const stored = await readStoredAuth();
+    const stored = await readStoredAuth(authFilePath());
     const baseUrl = process.env.EVO_API_BASE_URL || stored?.baseUrl || "http://127.0.0.1:8080";
     const accessToken = process.env.EVO_API_TOKEN || stored?.accessToken || "";
     output({
