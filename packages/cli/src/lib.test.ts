@@ -6,6 +6,7 @@ import path from "node:path";
 import {
   authFilePath,
   clearStoredAuth,
+  isSettledRunStatus,
   isTerminalRunStatus,
   parseContext,
   parseIntervalMs,
@@ -43,6 +44,16 @@ test("isTerminalRunStatus recognizes only terminal statuses", () => {
   }
   for (const status of ["queued", "running", "awaiting_approval", "", undefined]) {
     assert.equal(isTerminalRunStatus(status), false, String(status));
+  }
+});
+
+test("isSettledRunStatus also treats awaiting_approval as a hand-back point", () => {
+  // Settled = terminal plus the approval gate, mirroring the MCP server.
+  for (const status of ["completed", "failed", "rejected", "awaiting_approval"]) {
+    assert.equal(isSettledRunStatus(status), true, status);
+  }
+  for (const status of ["queued", "running", "", undefined]) {
+    assert.equal(isSettledRunStatus(status), false, String(status));
   }
 });
 
@@ -183,4 +194,25 @@ test("watchRunLoop polls until a run settles, emitting and sleeping between", as
   assert.deepEqual(emitted, ["queued", "running", "completed"]);
   // Sleeps happen only between non-terminal polls: two here, both at the interval.
   assert.deepEqual(sleepIntervals, [5, 5]);
+});
+
+test("watchRunLoop stops when a run parks awaiting approval", async () => {
+  // The most common runbooks gate on approval; the loop must hand back there
+  // instead of polling forever on a status that can never advance on its own.
+  const statuses = ["queued", "running", "awaiting_approval", "completed"];
+  const emitted: string[] = [];
+  let polls = 0;
+  const result = await watchRunLoop({
+    getRun: async () => {
+      const status = statuses[polls++];
+      return { run: { status } };
+    },
+    emit: (run) => emitted.push(run.run.status ?? ""),
+    intervalMs: 5,
+    sleep: async () => {}
+  });
+  assert.equal(result.run.status, "awaiting_approval");
+  // It must stop at the gate, never reaching the later "completed" status.
+  assert.deepEqual(emitted, ["queued", "running", "awaiting_approval"]);
+  assert.equal(polls, 3);
 });

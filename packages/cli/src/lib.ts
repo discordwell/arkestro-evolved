@@ -21,14 +21,28 @@ export interface ResolvedClientOptions {
   actorUser?: string;
 }
 
-// Terminal run statuses shared by `run watch`; mirrors isTerminalRunStatus in
-// the Go API and SETTLED_RUN_STATUSES in the MCP server.
+// Terminal run statuses: the run is finished and will never change again.
+// Mirrors isTerminalRunStatus in the Go API.
 export const TERMINAL_RUN_STATUSES = ["completed", "failed", "rejected"] as const;
 
 const terminalRunStatuses = new Set<string>(TERMINAL_RUN_STATUSES);
 
 export function isTerminalRunStatus(status: string | undefined): boolean {
   return terminalRunStatuses.has(status ?? "");
+}
+
+// Settled run statuses for `run watch`: the run has either finished or parked
+// at an approval gate, where it cannot make further automated progress until an
+// out-of-band approve/reject decision. Mirrors SETTLED_RUN_STATUSES in the MCP
+// server so the CLI and MCP agree on when to hand control back. Without
+// awaiting_approval here, watching any approval-required runbook would poll
+// forever, re-emitting an unchanged envelope, since that status is not terminal.
+export const SETTLED_RUN_STATUSES = [...TERMINAL_RUN_STATUSES, "awaiting_approval"] as const;
+
+const settledRunStatuses = new Set<string>(SETTLED_RUN_STATUSES);
+
+export function isSettledRunStatus(status: string | undefined): boolean {
+  return settledRunStatuses.has(status ?? "");
 }
 
 // parseContext turns repeated `key=value` flags into an object. The first `=`
@@ -104,9 +118,11 @@ export interface WatchRunLoopOptions<T> {
   sleep?: (ms: number) => Promise<void>;
 }
 
-// watchRunLoop polls a run, emitting each envelope, until it reaches a terminal
-// status, then returns the final envelope. Sleep is injectable so tests do not
-// wait on real timers.
+// watchRunLoop polls a run, emitting each envelope, until it reaches a settled
+// status (terminal, or parked awaiting approval), then returns the final
+// envelope. Stopping at an approval gate mirrors the MCP server: the run cannot
+// advance without an out-of-band decision, so polling on would only re-emit the
+// same envelope forever. Sleep is injectable so tests do not wait on real timers.
 export async function watchRunLoop<T extends { run: { status?: string } }>({
   getRun,
   emit,
@@ -116,7 +132,7 @@ export async function watchRunLoop<T extends { run: { status?: string } }>({
   for (;;) {
     const run = await getRun();
     emit(run);
-    if (isTerminalRunStatus(run.run.status)) {
+    if (isSettledRunStatus(run.run.status)) {
       return run;
     }
     await sleep(intervalMs);

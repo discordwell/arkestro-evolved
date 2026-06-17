@@ -26,11 +26,21 @@ async function createClient(): Promise<EvoClient> {
 }
 
 async function watchRun(client: EvoClient, runId: string, intervalMs: number, asJSON: boolean): Promise<void> {
-  await watchRunLoop<RunEnvelope>({
+  const final = await watchRunLoop<RunEnvelope>({
     getRun: () => client.getRun(runId),
     emit: (run) => output(run, asJSON),
     intervalMs
   });
+  // A run parked awaiting approval is a hand-back point, not a finish line.
+  // Surface the next action on stderr so it does not pollute --json stdout.
+  if (final.run.status === "awaiting_approval") {
+    const pending = final.approvals.find((approval) => approval.status === "pending");
+    console.error(
+      pending
+        ? `Run ${runId} is awaiting approval. Decide it with: evo approval approve ${pending.id}`
+        : `Run ${runId} is awaiting approval.`
+    );
+  }
 }
 
 const program = new Command();
