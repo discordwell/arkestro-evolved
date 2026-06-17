@@ -90,6 +90,24 @@ func (c Catalog) Validate() error {
 		if runbook.ApprovalRequired != hasApproval {
 			return fmt.Errorf("runbook %q: approval_required=%t does not match approval steps present=%t", runbook.Slug, runbook.ApprovalRequired, hasApproval)
 		}
+		// Every write step must sit behind an approval gate: the platform's
+		// core contract is that external writes stop for approval, and an
+		// approval gates the steps that follow it. A write with no preceding
+		// approval would execute unguarded, so reject it at boot instead of
+		// silently bypassing the approval checkpoint at run time. (Declaring
+		// approval_required=false does not make ungated writes legitimate;
+		// it just means the runbook may not have any write steps.)
+		seenApproval := false
+		for _, step := range runbook.Steps {
+			switch step.Kind {
+			case "approval":
+				seenApproval = true
+			case "write":
+				if !seenApproval {
+					return fmt.Errorf("runbook %q: write step %q must be preceded by an approval step", runbook.Slug, step.Slug)
+				}
+			}
+		}
 	}
 	return nil
 }

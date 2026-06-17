@@ -340,6 +340,20 @@ func (m *Memory) ListApprovals(_ context.Context, workspaceID string) ([]domain.
 	return out, nil
 }
 
+func (m *Memory) ListApprovalsByRun(_ context.Context, runID string) ([]domain.ApprovalRequest, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]domain.ApprovalRequest, 0)
+	for _, approval := range m.approvals {
+		if approval.RunID == runID {
+			out = append(out, approval)
+		}
+	}
+	// Newest first, matching ListApprovals and the Postgres implementation.
+	sortByCreation(out, true, func(a domain.ApprovalRequest) (time.Time, string) { return a.CreatedAt, a.ID })
+	return out, nil
+}
+
 func (m *Memory) GetApproval(_ context.Context, id string) (domain.ApprovalRequest, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

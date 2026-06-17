@@ -39,9 +39,13 @@ client over the HTTP API.
   artifact root via `..`.
 - `catalog` — loads the runbook catalog JSON and validates it at boot (unique
   lowercase-kebab runbook/step slugs, known step kinds, `approval_required`
-  consistent with the presence of approval steps), so a broken catalog cannot
-  fail runs mid-execution. Step slugs become artifact file names, so the slug
-  charset is what keeps storage keys path-safe.
+  consistent with the presence of approval steps, and every `write` step gated
+  by a preceding `approval` step), so a broken catalog cannot fail runs
+  mid-execution. The write-gating rule enforces the platform contract that
+  external writes stop for approval: a runbook cannot ship a write that would
+  execute unguarded, regardless of its `approval_required` flag. Step slugs
+  become artifact file names, so the slug charset is what keeps storage keys
+  path-safe.
 - `worker` — polling loop that claims queued runs and executes runbook steps.
   The queue drains without waiting while claims succeed; after an error or an
   idle poll the worker waits one poll interval, so a persistent failure (e.g.

@@ -125,6 +125,32 @@ func TestValidateRejectsBrokenCatalogs(t *testing.T) {
 			},
 			wantErr: "approval_required",
 		},
+		{
+			// A write with no approval step at all is ungated even though the
+			// approval_required flag is self-consistent (false + no approval
+			// steps). The write-gating rule must still reject it.
+			name: "write step without any approval gate",
+			mutate: func(c *catalog.Catalog) {
+				c.Runbooks[0].ApprovalRequired = false
+				c.Runbooks[0].Steps = []domain.RunbookStep{
+					{Slug: "collect", Kind: "read"},
+					{Slug: "apply", Kind: "write"},
+				}
+			},
+			wantErr: "must be preceded by an approval",
+		},
+		{
+			// An approval that comes after the write does not gate it.
+			name: "write step before its approval",
+			mutate: func(c *catalog.Catalog) {
+				c.Runbooks[0].Steps = []domain.RunbookStep{
+					{Slug: "collect", Kind: "read"},
+					{Slug: "apply", Kind: "write"},
+					{Slug: "gate", Kind: "approval"},
+				}
+			},
+			wantErr: "must be preceded by an approval",
+		},
 	}
 
 	for _, tc := range cases {

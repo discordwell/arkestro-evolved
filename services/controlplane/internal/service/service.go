@@ -7,7 +7,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -342,15 +341,9 @@ func (s *ControlPlane) GetRunEnvelope(ctx context.Context, orgID, runID string) 
 	if run.OrgID != orgID {
 		return domain.RunEnvelope{}, ErrForbidden
 	}
-	approvals, err := s.repo.ListApprovals(ctx, run.WorkspaceID)
+	filteredApprovals, err := s.repo.ListApprovalsByRun(ctx, run.ID)
 	if err != nil {
 		return domain.RunEnvelope{}, err
-	}
-	filteredApprovals := make([]domain.ApprovalRequest, 0)
-	for _, approval := range approvals {
-		if approval.RunID == run.ID {
-			filteredApprovals = append(filteredApprovals, approval)
-		}
 	}
 	artifacts, err := s.repo.ListArtifactsByRun(ctx, run.ID)
 	if err != nil {
@@ -650,7 +643,7 @@ func (s *ControlPlane) processRun(ctx context.Context, run domain.TaskRun) error
 // approval step owns its own request, so a runbook with several approval
 // steps gates on every one of them instead of reusing the first decision.
 func (s *ControlPlane) findApproval(ctx context.Context, run domain.TaskRun, runbook domain.Runbook) (domain.ApprovalRequest, bool, error) {
-	approvals, err := s.repo.ListApprovals(ctx, run.WorkspaceID)
+	approvals, err := s.repo.ListApprovalsByRun(ctx, run.ID)
 	if err != nil {
 		return domain.ApprovalRequest{}, false, err
 	}
@@ -658,9 +651,6 @@ func (s *ControlPlane) findApproval(ctx context.Context, run domain.TaskRun, run
 	// belong to the runbook's first approval step.
 	legacyMatch := run.CurrentStep == firstApprovalStepIndex(runbook)
 	for _, approval := range approvals {
-		if approval.RunID != run.ID {
-			continue
-		}
 		if approval.StepIndex == run.CurrentStep || (approval.StepIndex == 0 && legacyMatch) {
 			return approval, true, nil
 		}
@@ -723,10 +713,6 @@ func (s *ControlPlane) appendEvent(ctx context.Context, run domain.TaskRun, kind
 		CreatedAt:   s.now(),
 	})
 	return err
-}
-
-func EnsureDir(path string) error {
-	return os.MkdirAll(path, 0o755)
 }
 
 func randomToken() (string, error) {

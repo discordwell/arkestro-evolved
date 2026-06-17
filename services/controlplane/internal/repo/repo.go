@@ -52,6 +52,10 @@ type Repository interface {
 
 	CreateApproval(context.Context, domain.ApprovalRequest) (domain.ApprovalRequest, error)
 	ListApprovals(context.Context, string) ([]domain.ApprovalRequest, error)
+	// ListApprovalsByRun returns just one run's approvals (newest first),
+	// using the run-id index instead of scanning the whole workspace; the run
+	// envelope and the worker's gate lookup hit this on every poll.
+	ListApprovalsByRun(context.Context, string) ([]domain.ApprovalRequest, error)
 	GetApproval(context.Context, string) (domain.ApprovalRequest, error)
 	// DecideApproval atomically transitions a pending approval to the given
 	// status; it returns ErrNotPending if the approval was already decided.

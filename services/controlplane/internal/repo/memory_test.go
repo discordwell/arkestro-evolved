@@ -127,6 +127,49 @@ func TestDecideApprovalIsCompareAndSwap(t *testing.T) {
 	}
 }
 
+// ListApprovalsByRun returns only the target run's approvals, newest first,
+// mirroring the ordering of the workspace-wide ListApprovals.
+func TestListApprovalsByRunScopesAndOrders(t *testing.T) {
+	ctx := context.Background()
+	m := repo.NewMemory()
+	base := time.Date(2026, 3, 14, 12, 0, 0, 0, time.UTC)
+	seed := []domain.ApprovalRequest{
+		{ID: "ap-1", RunID: "run-1", WorkspaceID: "ws-1", Status: "approved", CreatedAt: base},
+		{ID: "ap-2", RunID: "run-1", WorkspaceID: "ws-1", Status: "pending", CreatedAt: base.Add(time.Minute)},
+		{ID: "ap-3", RunID: "run-2", WorkspaceID: "ws-1", Status: "pending", CreatedAt: base.Add(2 * time.Minute)},
+	}
+	for _, approval := range seed {
+		if _, err := m.CreateApproval(ctx, approval); err != nil {
+			t.Fatalf("create approval: %v", err)
+		}
+	}
+
+	got, err := m.ListApprovalsByRun(ctx, "run-1")
+	if err != nil {
+		t.Fatalf("list by run: %v", err)
+	}
+	want := []string{"ap-2", "ap-1"} // newest first
+	if len(got) != len(want) {
+		t.Fatalf("expected %d approvals for run-1, got %d", len(want), len(got))
+	}
+	for i, approval := range got {
+		if approval.ID != want[i] {
+			t.Fatalf("expected order %v, got %s at %d", want, approval.ID, i)
+		}
+	}
+
+	none, err := m.ListApprovalsByRun(ctx, "run-3")
+	if err != nil {
+		t.Fatalf("list by run: %v", err)
+	}
+	if none == nil {
+		t.Fatalf("expected a non-nil empty slice for a run with no approvals")
+	}
+	if len(none) != 0 {
+		t.Fatalf("expected no approvals for run-3, got %d", len(none))
+	}
+}
+
 func TestMemoryGettersWrapErrNotFound(t *testing.T) {
 	ctx := context.Background()
 	m := repo.NewMemory()

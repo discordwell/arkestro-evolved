@@ -481,6 +481,20 @@ ORDER BY created_at DESC, id DESC
 	return collectRows(rows, scanApproval)
 }
 
+func (p *Postgres) ListApprovalsByRun(ctx context.Context, runID string) ([]domain.ApprovalRequest, error) {
+	rows, err := p.db.Query(ctx, `
+SELECT id, run_id, workspace_id, step_index, status, reason, decision_note, requested_by_surface, requested_by_agent, created_at, decided_at
+FROM approval_requests
+WHERE run_id = $1
+ORDER BY created_at DESC, id DESC
+`, runID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return collectRows(rows, scanApproval)
+}
+
 func (p *Postgres) GetApproval(ctx context.Context, id string) (domain.ApprovalRequest, error) {
 	row := p.db.QueryRow(ctx, `
 SELECT id, run_id, workspace_id, step_index, status, reason, decision_note, requested_by_surface, requested_by_agent, created_at, decided_at
