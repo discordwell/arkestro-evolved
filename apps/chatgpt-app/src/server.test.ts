@@ -128,6 +128,27 @@ test("approval routes dispatch approve vs reject with the note", async () => {
   ]);
 });
 
+test("an unknown approval decision is rejected without touching the control plane", async () => {
+  // A typo'd or malformed decision must not silently fall through to reject and
+  // terminate the run: it has to fail fast, before any upstream call.
+  const calls: string[] = [];
+  const record = (method: string) => async (): Promise<RunEnvelope> => {
+    calls.push(method);
+    return { run: { status: "queued" } } as unknown as RunEnvelope;
+  };
+  const app = appWithClient({ approve: record("approve"), reject: record("reject") });
+  await withServer(app, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/approvals/a1/approvve`, {
+      method: "POST",
+      headers: { ...AUTH, "content-type": "application/json" },
+      body: JSON.stringify({ note: "meant to approve" })
+    });
+    assert.equal(response.status, 400);
+    assert.deepEqual(await response.json(), { error: "decision must be approve or reject" });
+  });
+  assert.deepEqual(calls, []);
+});
+
 test("requests without a bearer token are rejected when no service token is set", async () => {
   const savedApp = process.env.EVO_CHATGPT_APP_TOKEN;
   const savedApi = process.env.EVO_API_TOKEN;

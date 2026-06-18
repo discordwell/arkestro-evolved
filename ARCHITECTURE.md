@@ -115,6 +115,12 @@ its own response, so an upstream 401 (bad token) or 404 (missing run) reaches
 the caller as that status instead of being flattened to 500; only genuinely
 unexpected (non-API) errors become 500.
 
+The companion also validates the approval decision (`approve`/`reject`) in its
+`/api/approvals/{id}/{decision}` route before proxying, mirroring the control
+plane's own check. A malformed decision is answered with a local `400` rather
+than silently falling through to reject — which would terminate the run — so the
+same approve-or-reject invariant the Go service enforces holds at every surface.
+
 ## Testing
 
 - `make test` runs both suites; `make test-go` / `make test-ts` individually.

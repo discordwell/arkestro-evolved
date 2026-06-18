@@ -101,9 +101,22 @@ export function createApp(clientForToken: ClientFactory = defaultClientForToken)
   });
 
   app.post("/api/approvals/:id/:decision", async (req, res, next) => {
+    // Approve and reject are distinct, validated operations everywhere else in
+    // the platform: the Go service rejects any other decision, and the API,
+    // CLI, and MCP expose them as separate endpoints/commands/tools. Guard the
+    // same invariant here so a malformed or typo'd decision (e.g. "approvve")
+    // can never silently fall through to reject — which would terminate the run.
+    // Mirror the control plane's error so the message is consistent across
+    // surfaces, and answer before touching the upstream so the bad request
+    // never mutates an approval.
+    const { decision } = req.params;
+    if (decision !== "approve" && decision !== "reject") {
+      res.status(400).json({ error: "decision must be approve or reject" });
+      return;
+    }
     try {
       const client = clientForToken(bearerToken(req.header("authorization")), "chatgpt-app");
-      const fn = req.params.decision === "approve" ? client.approve.bind(client) : client.reject.bind(client);
+      const fn = decision === "approve" ? client.approve.bind(client) : client.reject.bind(client);
       res.json(await fn(req.params.id, req.body?.note || ""));
     } catch (error) {
       next(error);
