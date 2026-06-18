@@ -399,6 +399,33 @@ func TestCrossOrgApprovalDecisionForbidden(t *testing.T) {
 	}
 }
 
+func TestListPoliciesOverHTTP(t *testing.T) {
+	server, _ := newTestServer(t)
+	client := login(t, server)
+
+	workspace := client.mustDo(http.MethodPost, "/v1/workspaces", map[string]string{
+		"name": "Gov", "slug": "gov",
+	}, http.StatusCreated)
+	workspaceID, _ := itemField(t, workspace, "item", "id").(string)
+
+	policies := client.mustDo(http.MethodGet, "/v1/policies?workspace_id="+workspaceID, nil, http.StatusOK)
+	items, _ := policies["items"].([]any)
+	if len(items) == 0 {
+		t.Fatalf("expected at least the seeded global policy, got %v", policies)
+	}
+	first, _ := items[0].(map[string]any)
+	if pattern, _ := first["action_pattern"].(string); pattern == "" {
+		t.Fatalf("expected a policy action_pattern, got %v", first)
+	}
+
+	// The route requires bearer auth like every other /v1 surface.
+	anon := &apiClient{t: t, baseURL: server.URL}
+	resp, _ := anon.do(http.MethodGet, "/v1/policies?workspace_id="+workspaceID, nil)
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("policies without token: expected 401, got %d", resp.StatusCode)
+	}
+}
+
 func TestApprovalFlowOverHTTP(t *testing.T) {
 	server, svc := newTestServer(t)
 	client := login(t, server)

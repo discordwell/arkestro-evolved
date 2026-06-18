@@ -18,6 +18,7 @@ export const toolDefinitions = [
   { name: "approval.list", description: "List approvals for a workspace", inputSchema: { type: "object", required: ["workspace_id"], properties: { workspace_id: { type: "string" } } } },
   { name: "approval.approve", description: "Approve a pending request", inputSchema: { type: "object", required: ["approval_id"], properties: { approval_id: { type: "string" }, note: { type: "string" } } } },
   { name: "approval.reject", description: "Reject a pending request", inputSchema: { type: "object", required: ["approval_id"], properties: { approval_id: { type: "string" }, note: { type: "string" } } } },
+  { name: "policy.list", description: "List policy rules in effect for a workspace (workspace-scoped plus global)", inputSchema: { type: "object", required: ["workspace_id"], properties: { workspace_id: { type: "string" } } } },
   { name: "audit.query", description: "Query audit events", inputSchema: { type: "object", required: ["workspace_id"], properties: { workspace_id: { type: "string" }, run_id: { type: "string" } } } }
 ] as const;
 
@@ -96,6 +97,8 @@ export async function executeTool(client: EvoClient, name: string, args: Record<
       return client.approve(String(args.approval_id), String(args.note || ""));
     case "approval.reject":
       return client.reject(String(args.approval_id), String(args.note || ""));
+    case "policy.list":
+      return client.listPolicies(String(args.workspace_id));
     case "audit.query":
       return client.listAuditEvents(String(args.workspace_id), args.run_id ? String(args.run_id) : "");
     default:

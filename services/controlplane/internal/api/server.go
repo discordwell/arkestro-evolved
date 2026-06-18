@@ -58,6 +58,7 @@ func (s *Server) routes() {
 			r.Get("/approvals", s.wrap(s.handleListApprovals))
 			r.Post("/approvals/{approvalID}/approve", s.wrap(s.handleApprove))
 			r.Post("/approvals/{approvalID}/reject", s.wrap(s.handleReject))
+			r.Get("/policies", s.wrap(s.handleListPolicies))
 			r.Get("/audit-events", s.wrap(s.handleListAuditEvents))
 		})
 	})
@@ -313,6 +314,14 @@ func (s *Server) handleReject(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	return json.NewEncoder(w).Encode(map[string]any{"item": item})
+}
+
+func (s *Server) handleListPolicies(w http.ResponseWriter, r *http.Request) error {
+	items, err := s.service.ListPolicies(r.Context(), s.orgID(r), r.URL.Query().Get("workspace_id"))
+	if err != nil {
+		return err
+	}
+	return json.NewEncoder(w).Encode(map[string]any{"items": items})
 }
 
 func (s *Server) handleListAuditEvents(w http.ResponseWriter, r *http.Request) error {

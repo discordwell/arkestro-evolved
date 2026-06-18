@@ -241,6 +241,13 @@ approval
     output(result, Boolean(options.json));
   });
 
+const policy = program.command("policy").description("Policy commands");
+policy
+  .command("list")
+  .requiredOption("--workspace-id <workspaceId>")
+  .option("--json", "machine-readable output")
+  .action(async (options) => output(await (await createClient()).listPolicies(options.workspaceId), options.json));
+
 const audit = program.command("audit").description("Audit commands");
 audit
   .command("list")

@@ -293,6 +293,18 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/RunEnvelopeResponse"
+  /v1/policies:
+    get:
+      operationId: listPolicies
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceIDQuery"
+      responses:
+        "200":
+          description: Policy rule list (workspace-scoped plus global rules)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PolicyListResponse"
   /v1/audit-events:
     get:
       operationId: listAuditEvents
@@ -606,6 +618,29 @@ components:
         decided_at:
           type: string
           format: date-time
+    PolicyRule:
+      type: object
+      required:
+        - id
+        - name
+        - action_pattern
+        - approval_required
+        - created_at
+      properties:
+        id: { type: string }
+        workspace_id:
+          type: string
+          description: Owning workspace, or empty for a global rule that applies to every workspace.
+        name: { type: string }
+        action_pattern:
+          type: string
+          description: Pattern matched against a step's "<kind>.<slug>" action (e.g. "write.*").
+        approval_required:
+          type: boolean
+          description: Whether a matching action must stop for approval before it executes.
+        created_at:
+          type: string
+          format: date-time
     AuditEvent:
       type: object
       required:
@@ -826,3 +861,11 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/AuditEvent"
+    PolicyListResponse:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/PolicyRule"

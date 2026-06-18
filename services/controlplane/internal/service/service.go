@@ -13,6 +13,7 @@ import (
 
 	"github.com/discordwell/evo-control-plane/services/controlplane/internal/catalog"
 	"github.com/discordwell/evo-control-plane/services/controlplane/internal/domain"
+	"github.com/discordwell/evo-control-plane/services/controlplane/internal/policy"
 	"github.com/discordwell/evo-control-plane/services/controlplane/internal/repo"
 	"github.com/discordwell/evo-control-plane/services/controlplane/internal/storage"
 	"github.com/google/uuid"
@@ -412,6 +413,17 @@ func (s *ControlPlane) ListApprovals(ctx context.Context, orgID, workspaceID str
 	return s.repo.ListApprovals(ctx, workspaceID)
 }
 
+// ListPolicies returns the policy rules in effect for a workspace: the
+// workspace's own rules plus global rules (those with an empty workspace ID).
+// These are the rules enforceWritePolicy evaluates at run time, surfaced so
+// operators and agents can see the governance in force.
+func (s *ControlPlane) ListPolicies(ctx context.Context, orgID, workspaceID string) ([]domain.PolicyRule, error) {
+	if _, err := s.authorizeWorkspace(ctx, orgID, workspaceID); err != nil {
+		return nil, err
+	}
+	return s.repo.ListPolicies(ctx, workspaceID)
+}
+
 func (s *ControlPlane) DecideApproval(ctx context.Context, orgID, approvalID, decision, note string, actor domain.Actor) (domain.RunEnvelope, error) {
 	approval, err := s.repo.GetApproval(ctx, approvalID)
 	if err != nil {
@@ -593,13 +605,24 @@ func (s *ControlPlane) processRun(ctx context.Context, run domain.TaskRun) error
 				return err
 			}
 			if !found {
+				// Attribute the gate to the policy that mandates approval for
+				// the write it guards, so the approver (and the audit trail)
+				// sees *why* sign-off is required, not just that it is.
+				reason := "Approval required for " + runbook.Title
+				ruleName, action, err := s.governingPolicy(ctx, run, runbook)
+				if err != nil {
+					return err
+				}
+				if ruleName != "" {
+					reason = fmt.Sprintf("Approval required by policy %q before %s", ruleName, action)
+				}
 				approval = domain.ApprovalRequest{
 					ID:                 uuid.NewString(),
 					RunID:              run.ID,
 					WorkspaceID:        run.WorkspaceID,
 					StepIndex:          run.CurrentStep,
 					Status:             "pending",
-					Reason:             "Approval required for " + runbook.Title,
+					Reason:             reason,
 					RequestedBySurface: run.RequestedBySurface,
 					RequestedByAgent:   run.RequestedByAgent,
 					CreatedAt:          s.now(),
@@ -607,7 +630,12 @@ func (s *ControlPlane) processRun(ctx context.Context, run domain.TaskRun) error
 				if _, err := s.repo.CreateApproval(ctx, approval); err != nil {
 					return err
 				}
-				if err := s.appendEvent(ctx, run, "approval.requested", "Approval requested", map[string]any{"approval_id": approval.ID}); err != nil {
+				requestedPayload := map[string]any{"approval_id": approval.ID}
+				if ruleName != "" {
+					requestedPayload["policy"] = ruleName
+					requestedPayload["action"] = action
+				}
+				if err := s.appendEvent(ctx, run, "approval.requested", "Approval requested", requestedPayload); err != nil {
 					return err
 				}
 				run.Status = "awaiting_approval"
@@ -635,6 +663,9 @@ func (s *ControlPlane) processRun(ctx context.Context, run domain.TaskRun) error
 			}
 			run.CurrentStep++
 		case "write":
+			if err := s.enforceWritePolicy(ctx, run, runbook, step); err != nil {
+				return err
+			}
 			if err := s.appendEvent(ctx, run, "step.write", "Executed write step "+step.Slug, map[string]any{"step": step.Slug}); err != nil {
 				return err
 			}
@@ -682,6 +713,101 @@ func firstApprovalStepIndex(runbook domain.Runbook) int {
 		}
 	}
 	return -1
+}
+
+// nextWriteStep returns the first write step after afterIndex — the write an
+// approval gate at that index guards.
+func nextWriteStep(runbook domain.Runbook, afterIndex int) (domain.RunbookStep, bool) {
+	for i := afterIndex + 1; i < len(runbook.Steps); i++ {
+		if runbook.Steps[i].Kind == "write" {
+			return runbook.Steps[i], true
+		}
+	}
+	return domain.RunbookStep{}, false
+}
+
+// governingPolicy returns the name of the policy rule that mandates approval for
+// the write a gate guards, and that write's action string. Both are empty when
+// no policy applies, so an approval gate can attribute itself to the rule that
+// requires it.
+func (s *ControlPlane) governingPolicy(ctx context.Context, run domain.TaskRun, runbook domain.Runbook) (ruleName, action string, err error) {
+	step, ok := nextWriteStep(runbook, run.CurrentStep)
+	if !ok {
+		return "", "", nil
+	}
+	rules, err := s.repo.ListPolicies(ctx, run.WorkspaceID)
+	if err != nil {
+		return "", "", err
+	}
+	act := policy.Action("write", step.Slug)
+	if required, rule := policy.RequiresApproval(rules, act); required {
+		return rule.Name, act, nil
+	}
+	return "", "", nil
+}
+
+// enforceWritePolicy is the runtime half of the platform contract that
+// sensitive actions stop for approval. Before a write executes, it checks
+// whether a policy rule mandates approval for the action; if one does, it
+// verifies the run actually cleared an approval gate guarding this step. The
+// catalog guarantees this structurally at boot — every write follows an
+// approval step — so a well-formed run always passes. Enforcing it again here
+// means a runbook that reached the worker through any path that skipped catalog
+// validation still cannot perform an unguarded external write: the violation is
+// recorded as a policy.violation audit event and the run fails instead.
+func (s *ControlPlane) enforceWritePolicy(ctx context.Context, run domain.TaskRun, runbook domain.Runbook, step domain.RunbookStep) error {
+	rules, err := s.repo.ListPolicies(ctx, run.WorkspaceID)
+	if err != nil {
+		return err
+	}
+	action := policy.Action("write", step.Slug)
+	required, rule := policy.RequiresApproval(rules, action)
+	if !required {
+		return nil
+	}
+	approved, err := s.writeGateApproved(ctx, run, runbook)
+	if err != nil {
+		return err
+	}
+	if approved {
+		return nil
+	}
+	_ = s.appendEvent(ctx, run, "policy.violation", "Write blocked by policy", map[string]any{
+		"policy": rule.Name,
+		"action": action,
+		"step":   step.Slug,
+	})
+	return fmt.Errorf("policy %q requires approval before write step %q", rule.Name, step.Slug)
+}
+
+// writeGateApproved reports whether the run cleared the approval gate guarding
+// its current step: the nearest preceding approval step must carry an approved
+// request. It mirrors findApproval's legacy index-0 fallback so an approval
+// persisted before step scoping still counts for the runbook's first gate.
+func (s *ControlPlane) writeGateApproved(ctx context.Context, run domain.TaskRun, runbook domain.Runbook) (bool, error) {
+	gate := -1
+	for i := 0; i < run.CurrentStep && i < len(runbook.Steps); i++ {
+		if runbook.Steps[i].Kind == "approval" {
+			gate = i
+		}
+	}
+	if gate == -1 {
+		return false, nil
+	}
+	approvals, err := s.repo.ListApprovalsByRun(ctx, run.ID)
+	if err != nil {
+		return false, err
+	}
+	legacyMatch := gate == firstApprovalStepIndex(runbook)
+	for _, approval := range approvals {
+		if approval.Status != "approved" {
+			continue
+		}
+		if approval.StepIndex == gate || (approval.StepIndex == 0 && legacyMatch) {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func (s *ControlPlane) createArtifact(ctx context.Context, run domain.TaskRun, runbook domain.Runbook, step domain.RunbookStep) (domain.Artifact, error) {

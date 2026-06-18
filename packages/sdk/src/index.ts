@@ -15,6 +15,7 @@ export type TaskTemplate = components["schemas"]["TaskTemplate"];
 export type TaskRun = components["schemas"]["TaskRun"];
 export type Artifact = components["schemas"]["Artifact"];
 export type ApprovalRequest = components["schemas"]["ApprovalRequest"];
+export type PolicyRule = components["schemas"]["PolicyRule"];
 export type AuditEvent = components["schemas"]["AuditEvent"];
 export type ArtifactDocument = components["schemas"]["ArtifactDocument"];
 export type RunEnvelope = components["schemas"]["RunEnvelope"];
@@ -34,6 +35,7 @@ type TaskTemplateListResponse = components["schemas"]["TaskTemplateListResponse"
 type RunListResponse = components["schemas"]["RunListResponse"];
 type ArtifactListResponse = components["schemas"]["ArtifactListResponse"];
 type ApprovalListResponse = components["schemas"]["ApprovalListResponse"];
+type PolicyListResponse = components["schemas"]["PolicyListResponse"];
 type AuditEventListResponse = components["schemas"]["AuditEventListResponse"];
 
 export interface ClientOptions {
@@ -237,6 +239,14 @@ export class EvoClient {
       headers: this.headers()
     });
     return this.unwrapItem<RunEnvelopeResponse, RunEnvelope>(data, error, response);
+  }
+
+  async listPolicies(workspaceId: string): Promise<PolicyRule[]> {
+    const { data, error, response } = await this.client.GET("/v1/policies", {
+      params: { query: { workspace_id: workspaceId } },
+      headers: this.headers()
+    });
+    return this.unwrapList<PolicyListResponse, PolicyRule>(data, error, response);
   }
 
   async listAuditEvents(workspaceId: string, runId = ""): Promise<AuditEvent[]> {

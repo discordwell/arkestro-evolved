@@ -3,6 +3,7 @@ package service_test
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -593,5 +594,155 @@ func TestMissingResourcesWrapErrNotFound(t *testing.T) {
 	}
 	if _, err := svc.GetArtifactDocument(ctx, "org-1", "no-such-artifact"); !errors.Is(err, repo.ErrNotFound) {
 		t.Fatalf("expected ErrNotFound for unknown artifact, got %v", err)
+	}
+}
+
+// The seeded write.* policy must make the worker refuse a write that has no
+// satisfied approval gate. The catalog validator rejects such a runbook at boot,
+// so this injects one directly to stand in for any path that reached the worker
+// without that check — the platform contract that external writes stop for
+// approval must still hold at execution time, not only at boot.
+func TestPolicyRefusesUngatedWrite(t *testing.T) {
+	cat := catalog.Catalog{
+		Version: 1,
+		Runbooks: []domain.Runbook{{
+			Slug:             "ungated",
+			Title:            "Ungated Write",
+			Family:           "test",
+			ApprovalRequired: false,
+			Steps: []domain.RunbookStep{
+				{Slug: "collect", Kind: "read"},
+				{Slug: "apply", Kind: "write"},
+			},
+		}},
+	}
+	svc, _ := newServiceWithCatalog(t, cat)
+	ctx := context.Background()
+	workspace, err := svc.CreateWorkspace(ctx, "org-1", "Ops", "ops", "")
+	if err != nil {
+		t.Fatalf("workspace: %v", err)
+	}
+
+	run, err := svc.CreateRun(ctx, "org-1", workspace.ID, "", "ungated", domain.Actor{Surface: "test", Agent: "test"}, nil)
+	if err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	if _, err := svc.ProcessNextRun(ctx); err == nil {
+		t.Fatalf("expected the ungated write to fail the run")
+	}
+
+	after, err := svc.GetRunEnvelope(ctx, "org-1", run.Run.ID)
+	if err != nil {
+		t.Fatalf("get run: %v", err)
+	}
+	if after.Run.Status != "failed" {
+		t.Fatalf("expected failed run, got %s", after.Run.Status)
+	}
+	for _, e := range after.Events {
+		if e.Kind == "step.write" {
+			t.Fatalf("the write must not execute when no approval gate is satisfied")
+		}
+	}
+	violation := eventByKind(t, after.Events, "policy.violation")
+	if violation.Payload["policy"] != "approval-required-for-write" {
+		t.Fatalf("policy.violation must cite the governing rule, got %v", violation.Payload["policy"])
+	}
+	if violation.Payload["action"] != "write.apply" {
+		t.Fatalf("policy.violation must cite the blocked action, got %v", violation.Payload["action"])
+	}
+}
+
+// A gated write whose approval was granted still executes: the policy check is
+// satisfied by the approved gate, so enforcement never blocks the happy path.
+func TestPolicyAllowsApprovedWrite(t *testing.T) {
+	svc := newService(t)
+	workspace, env := setupWorkspace(t, svc)
+	ctx := context.Background()
+
+	run, err := svc.CreateRun(ctx, "org-1", workspace.ID, env.ID, "release-coordination", domain.Actor{Surface: "mcp", Agent: "claude"}, nil)
+	if err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	if _, err := svc.ProcessNextRun(ctx); err != nil {
+		t.Fatalf("process to gate: %v", err)
+	}
+	waiting, err := svc.GetRunEnvelope(ctx, "org-1", run.Run.ID)
+	if err != nil {
+		t.Fatalf("get run: %v", err)
+	}
+	if _, err := svc.DecideApproval(ctx, "org-1", pendingApproval(t, waiting).ID, "approve", "ship it",
+		domain.Actor{Surface: "console", Agent: "human", User: "approver@test.local"}); err != nil {
+		t.Fatalf("approve: %v", err)
+	}
+	if _, err := svc.ProcessNextRun(ctx); err != nil {
+		t.Fatalf("process after approval: %v", err)
+	}
+	done, err := svc.GetRunEnvelope(ctx, "org-1", run.Run.ID)
+	if err != nil {
+		t.Fatalf("get run: %v", err)
+	}
+	if done.Run.Status != "completed" {
+		t.Fatalf("approved write must complete the run, got %s", done.Run.Status)
+	}
+	eventByKind(t, done.Events, "step.write") // the write executed
+}
+
+// An approval gate must cite the policy that mandates it, both in the
+// operator-visible reason and in the approval.requested audit payload, so the
+// answer to "why am I being asked to approve this?" is recorded.
+func TestApprovalGateCitesGoverningPolicy(t *testing.T) {
+	svc := newService(t)
+	workspace, env := setupWorkspace(t, svc)
+	ctx := context.Background()
+
+	run, err := svc.CreateRun(ctx, "org-1", workspace.ID, env.ID, "release-coordination", domain.Actor{Surface: "mcp", Agent: "claude"}, nil)
+	if err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	if _, err := svc.ProcessNextRun(ctx); err != nil {
+		t.Fatalf("process: %v", err)
+	}
+	waiting, err := svc.GetRunEnvelope(ctx, "org-1", run.Run.ID)
+	if err != nil {
+		t.Fatalf("get run: %v", err)
+	}
+	approval := pendingApproval(t, waiting)
+	if !strings.Contains(approval.Reason, "approval-required-for-write") {
+		t.Fatalf("approval reason must cite the governing policy, got %q", approval.Reason)
+	}
+	if !strings.Contains(approval.Reason, "write.execute-rollout") {
+		t.Fatalf("approval reason must cite the guarded write action, got %q", approval.Reason)
+	}
+	requested := eventByKind(t, waiting.Events, "approval.requested")
+	if requested.Payload["policy"] != "approval-required-for-write" {
+		t.Fatalf("approval.requested must record the policy, got %v", requested.Payload["policy"])
+	}
+	if requested.Payload["action"] != "write.execute-rollout" {
+		t.Fatalf("approval.requested must record the guarded action, got %v", requested.Payload["action"])
+	}
+}
+
+// ListPolicies returns the seeded global rule for any workspace and is tenant
+// scoped like every other workspace-bound list.
+func TestListPoliciesReturnsSeededRuleAndIsTenantScoped(t *testing.T) {
+	svc := newService(t)
+	workspace, _ := setupWorkspace(t, svc)
+	ctx := context.Background()
+
+	policies, err := svc.ListPolicies(ctx, "org-1", workspace.ID)
+	if err != nil {
+		t.Fatalf("list policies: %v", err)
+	}
+	found := false
+	for _, p := range policies {
+		if p.Name == "approval-required-for-write" && p.ActionPattern == "write.*" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected the seeded global policy, got %+v", policies)
+	}
+	if _, err := svc.ListPolicies(ctx, "org-2", workspace.ID); !errors.Is(err, service.ErrForbidden) {
+		t.Fatalf("expected ErrForbidden for cross-org access, got %v", err)
 	}
 }

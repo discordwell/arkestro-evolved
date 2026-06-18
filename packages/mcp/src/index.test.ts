@@ -20,6 +20,20 @@ const instantSleep = async (): Promise<void> => {};
 test("tool catalog exposes the expected remote surfaces", () => {
   assert.ok(toolDefinitions.some((tool) => tool.name === "runbook.run"));
   assert.ok(toolDefinitions.some((tool) => tool.name === "approval.approve"));
+  assert.ok(toolDefinitions.some((tool) => tool.name === "policy.list"));
+});
+
+test("policy.list dispatches to the SDK with the workspace id", async () => {
+  const seen: string[] = [];
+  const client = {
+    listPolicies: async (workspaceId: string) => {
+      seen.push(workspaceId);
+      return [{ name: "approval-required-for-write" }];
+    }
+  } as unknown as EvoClient;
+  const result = (await executeTool(client, "policy.list", { workspace_id: "ws-1" })) as Array<{ name: string }>;
+  assert.deepEqual(seen, ["ws-1"]);
+  assert.equal(result[0].name, "approval-required-for-write");
 });
 
 test("transport mode parser favors explicit http mode", () => {

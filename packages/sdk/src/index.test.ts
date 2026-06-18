@@ -44,6 +44,17 @@ test("list calls unwrap the items envelope", async () => {
   );
 });
 
+test("listPolicies unwraps the policy rules envelope", async () => {
+  const client = clientReturning(
+    { items: [{ id: "p1", name: "approval-required-for-write", action_pattern: "write.*", approval_required: true }] },
+    { status: 200 }
+  );
+  const policies = await client.listPolicies("ws-1");
+  assert.equal(policies.length, 1);
+  assert.equal(policies[0].action_pattern, "write.*");
+  assert.equal(policies[0].approval_required, true);
+});
+
 test("item calls unwrap the item envelope", async () => {
   const client = clientReturning({ item: { id: "w1", name: "Ops" } }, { status: 201 });
   const workspace = await client.createWorkspace({ name: "Ops", slug: "ops" });

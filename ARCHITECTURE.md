@@ -28,7 +28,12 @@ client over the HTTP API.
   events; a run that is already terminal closes the stream immediately
   instead of waiting out a poll tick).
 - `service` — the `ControlPlane` orchestrator: auth, tenancy checks, run
-  lifecycle, approval decisions, artifact creation, audit events.
+  lifecycle, approval decisions, policy enforcement, artifact creation, audit
+  events.
+- `policy` — evaluates policy rules against a step's `<kind>.<slug>` action
+  (e.g. `write.execute-rollout`). A rule's `action_pattern` supports `*`,
+  `prefix.*`, and exact matches; the service uses it to decide whether an
+  action must stop for approval.
 - `repo` — `Repository` interface with two implementations: `Memory` (tests)
   and `Postgres` (pgx, schema auto-created under an advisory lock). Both wrap
   `repo.ErrNotFound` for missing records; the API maps it to HTTP 404. List
@@ -43,9 +48,10 @@ client over the HTTP API.
   by a preceding `approval` step), so a broken catalog cannot fail runs
   mid-execution. The write-gating rule enforces the platform contract that
   external writes stop for approval: a runbook cannot ship a write that would
-  execute unguarded, regardless of its `approval_required` flag. Step slugs
-  become artifact file names, so the slug charset is what keeps storage keys
-  path-safe.
+  execute unguarded, regardless of its `approval_required` flag. This is the
+  static, boot-time half of that invariant; the policy layer enforces it again
+  dynamically at execution time (see *Policy enforcement*). Step slugs become
+  artifact file names, so the slug charset is what keeps storage keys path-safe.
 - `worker` — polling loop that claims queued runs and executes runbook steps.
   The queue drains without waiting while claims succeed; after an error or an
   idle poll the worker waits one poll interval, so a persistent failure (e.g.
@@ -78,11 +84,46 @@ queued -> running -> [awaiting_approval -> queued] -> completed | failed | rejec
   approval step.)
 - `artifact` steps write markdown documents to the object store and register
   them with the run.
+- Before a `write` step executes, the worker evaluates the workspace's policy
+  rules (see *Policy enforcement*). If a rule mandates approval for the write
+  but no preceding approval gate has been approved for the run, the worker
+  records a `policy.violation` audit event and fails the run instead of
+  performing the unguarded write.
 
 Approval decisions are tenant-checked against the owning run's org **before**
 any state is persisted (`service.DecideApproval`), and the pending→decided
 transition is compare-and-swap in the repository, so concurrent decisions
 resolve to exactly one winner (the rest get `repo.ErrNotPending` → HTTP 400).
+
+## Policy enforcement
+
+`policy_rule`s decide whether a step's action must stop for approval. A rule
+carries an `action_pattern` (`*`, `prefix.*`, or an exact `<kind>.<slug>`), an
+`approval_required` flag, and an optional `workspace_id` (empty = global, applies
+to every workspace). Bootstrap seeds one global rule,
+`approval-required-for-write` (`write.*`), so the default posture is "every write
+needs approval".
+
+Rules are enforced in two complementary places, so the platform's core promise —
+external writes always stop for approval — holds whether a runbook is checked at
+boot or only reaches the worker at run time:
+
+- **Boot (catalog):** every `write` step must be structurally preceded by an
+  `approval` step, or the catalog fails to load.
+- **Run time (worker):** before executing a write, the worker confirms a
+  policy-required gate was actually approved. A well-formed run always passes
+  (the catalog guaranteed the gate and in-order execution guaranteed it was
+  approved), so this is defense in depth: a runbook that reached the worker
+  through any path that skipped catalog validation cannot perform an unguarded
+  write.
+
+When a gate is created it is attributed to the policy that mandates it: the
+approval's `reason` and the `approval.requested` audit payload name the governing
+rule and the action it guards, so the trail answers "why is approval required?".
+
+Rules in force for a workspace are readable at `GET /v1/policies?workspace_id=…`,
+through the `evo policy list` CLI command, and via the `policy.list` MCP tool —
+visibility only; rules are seeded/managed server-side, not mutated over the API.
 
 ## Auth model
 

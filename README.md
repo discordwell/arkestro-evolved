@@ -129,6 +129,30 @@ That script uses a temporary `XDG_CONFIG_HOME` and deletes the local token on ex
 - The companion advertises MCP connection metadata at `GET /api/connect`.
 - Both remote surfaces accept `Authorization: Bearer <token>` and target the same control-plane API.
 
+## Policy rules
+
+Policy rules govern whether a step's action must stop for approval. Each rule has
+an `action_pattern` (`*`, `prefix.*`, or an exact `<kind>.<slug>`), an
+`approval_required` flag, and an optional workspace scope (empty = global).
+Bootstrap seeds one global rule, `approval-required-for-write` (`write.*`), so by
+default every write needs approval.
+
+Enforcement happens in two layers: the catalog rejects any runbook whose write is
+not structurally preceded by an approval step (at boot), and the worker re-checks
+at run time that a policy-required write actually cleared an approved gate before
+executing it. A well-formed run is unaffected; an unguarded write is refused with
+a `policy.violation` audit event rather than executed. Approval gates record the
+policy that mandated them, so the trail explains *why* sign-off was required.
+
+List the rules in force for a workspace:
+
+```bash
+node packages/cli/dist/index.js policy list --workspace-id <id> --json
+```
+
+They are also available at `GET /v1/policies?workspace_id=<id>` and through the
+`policy.list` MCP tool.
+
 ## Tests
 
 ```bash

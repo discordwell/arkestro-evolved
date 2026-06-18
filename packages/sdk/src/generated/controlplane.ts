@@ -276,6 +276,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/policies": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listPolicies"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/audit-events": {
         parameters: {
             query?: never;
@@ -440,6 +456,18 @@ export interface components {
             /** Format: date-time */
             decided_at?: string;
         };
+        PolicyRule: {
+            id: string;
+            /** @description Owning workspace, or empty for a global rule that applies to every workspace. */
+            workspace_id?: string;
+            name: string;
+            /** @description Pattern matched against a step's "<kind>.<slug>" action (e.g. "write.*"). */
+            action_pattern: string;
+            /** @description Whether a matching action must stop for approval before it executes. */
+            approval_required: boolean;
+            /** Format: date-time */
+            created_at: string;
+        };
         AuditEvent: {
             id: string;
             org_id: string;
@@ -546,6 +574,9 @@ export interface components {
         };
         AuditEventListResponse: {
             items: components["schemas"]["AuditEvent"][];
+        };
+        PolicyListResponse: {
+            items: components["schemas"]["PolicyRule"][];
         };
     };
     responses: {
@@ -1046,6 +1077,28 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RunEnvelopeResponse"];
+                };
+            };
+        };
+    };
+    listPolicies: {
+        parameters: {
+            query: {
+                workspace_id: components["parameters"]["WorkspaceIDQuery"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Policy rule list (workspace-scoped plus global rules) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PolicyListResponse"];
                 };
             };
         };
