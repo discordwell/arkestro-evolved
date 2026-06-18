@@ -432,6 +432,17 @@ func TestApprovalFlowOverHTTP(t *testing.T) {
 		t.Fatalf("expected approved state, got %v", state)
 	}
 
+	// The decision must be attributed to the authenticated approver, so the
+	// audit answer to "who approved this?" survives over HTTP.
+	decidedApprovals, _ := itemField(t, decided, "item", "approvals").([]any)
+	if len(decidedApprovals) != 1 {
+		t.Fatalf("expected one approval in envelope, got %v", decidedApprovals)
+	}
+	decidedApproval, _ := decidedApprovals[0].(map[string]any)
+	if decidedApproval["decided_by"] != testEmail {
+		t.Fatalf("expected decision attributed to %s, got %v", testEmail, decidedApproval["decided_by"])
+	}
+
 	// Re-deciding a settled approval must fail without changing anything.
 	resp, _ := client.do(http.MethodPost, "/v1/approvals/"+approvalID+"/reject", map[string]string{"note": "too late"})
 	if resp.StatusCode != http.StatusBadRequest {

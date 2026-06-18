@@ -107,7 +107,7 @@ func TestDecideApprovalIsCompareAndSwap(t *testing.T) {
 			if i%2 == 1 {
 				status = "rejected"
 			}
-			_, err := m.DecideApproval(ctx, "ap-1", status, "race", time.Now().UTC())
+			_, err := m.DecideApproval(ctx, "ap-1", status, "race", "decider@test.local", time.Now().UTC())
 			switch {
 			case err == nil:
 				wins.Add(1)
@@ -122,7 +122,16 @@ func TestDecideApprovalIsCompareAndSwap(t *testing.T) {
 		t.Fatalf("expected exactly one winning decision, got %d", wins.Load())
 	}
 
-	if _, err := m.DecideApproval(ctx, "missing", "approved", "", time.Now().UTC()); !errors.Is(err, repo.ErrNotFound) {
+	// The winning decision must have recorded the decider on the approval.
+	decided, err := m.GetApproval(ctx, "ap-1")
+	if err != nil {
+		t.Fatalf("get approval: %v", err)
+	}
+	if decided.DecidedBy != "decider@test.local" {
+		t.Fatalf("expected decided_by recorded, got %q", decided.DecidedBy)
+	}
+
+	if _, err := m.DecideApproval(ctx, "missing", "approved", "", "decider@test.local", time.Now().UTC()); !errors.Is(err, repo.ErrNotFound) {
 		t.Fatalf("expected ErrNotFound for missing approval, got %v", err)
 	}
 }

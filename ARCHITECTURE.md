@@ -68,10 +68,14 @@ queued -> running -> [awaiting_approval -> queued] -> completed | failed | rejec
   and advances steps, emitting audit events per step.
 - An `approval` step creates an `approval_request` scoped to that step
   (`step_index`), parks the run in `awaiting_approval`, and stops. Approving
-  re-queues the run; rejecting terminates it as `rejected`. A runbook with
-  several approval steps gates on each one — a decision never satisfies a
-  later gate. (Approvals persisted before step scoping carry index 0 and are
-  honored for the runbook's first approval step.)
+  re-queues the run; rejecting terminates it as `rejected`. The decision is
+  attributed to whoever made it: the deciding actor's identity is recorded on
+  the approval as `decided_by` (its user, falling back to its agent) and in the
+  `approval.approved` / `approval.rejected` audit event, so the trail answers
+  "who approved this write?". A runbook with several approval steps gates on
+  each one — a decision never satisfies a later gate. (Approvals persisted
+  before step scoping carry index 0 and are honored for the runbook's first
+  approval step.)
 - `artifact` steps write markdown documents to the object store and register
   them with the run.
 
@@ -90,8 +94,12 @@ resolve to exactly one winner (the rest get `repo.ErrNotPending` → HTTP 400).
   refreshes at most once per minute instead of writing on every request.
 - Every request resolves the token to an org + user principal; list/get
   operations are scoped through `authorizeWorkspace` / org-ID comparisons.
-- Actor attribution (`X-Actor-Surface`, `X-Actor-Agent`, `X-Actor-User`)
-  flows into runs, artifacts, and audit events.
+- Actor attribution flows from the `X-Actor-Surface` / `X-Actor-Agent` /
+  `X-Actor-User` headers (the user defaults to the authenticated principal).
+  Surface and agent are stored on runs and artifacts; the human user is kept in
+  the audit trail — the `run.created` event records the initiating user, and an
+  approval decision records the deciding user as `decided_by` on the approval
+  and in its audit event.
 
 ## Error mapping
 

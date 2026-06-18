@@ -58,8 +58,9 @@ type Repository interface {
 	ListApprovalsByRun(context.Context, string) ([]domain.ApprovalRequest, error)
 	GetApproval(context.Context, string) (domain.ApprovalRequest, error)
 	// DecideApproval atomically transitions a pending approval to the given
-	// status; it returns ErrNotPending if the approval was already decided.
-	DecideApproval(ctx context.Context, id, status, note string, decidedAt time.Time) (domain.ApprovalRequest, error)
+	// status, recording decidedBy (who made the call); it returns
+	// ErrNotPending if the approval was already decided.
+	DecideApproval(ctx context.Context, id, status, note, decidedBy string, decidedAt time.Time) (domain.ApprovalRequest, error)
 
 	ListPolicies(context.Context, string) ([]domain.PolicyRule, error)
 	CreatePolicy(context.Context, domain.PolicyRule) (domain.PolicyRule, error)

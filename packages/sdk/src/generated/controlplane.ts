@@ -431,6 +431,8 @@ export interface components {
             status: string;
             reason: string;
             decision_note?: string;
+            /** @description Identity of whoever approved or rejected the request (the deciding actor's user, falling back to its agent). Empty while pending. */
+            decided_by?: string;
             requested_by_surface: string;
             requested_by_agent: string;
             /** Format: date-time */

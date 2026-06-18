@@ -309,6 +309,17 @@ func (s *ControlPlane) CreateRun(ctx context.Context, orgID, workspaceID, enviro
 	if _, err := s.repo.CreateTaskRun(ctx, run); err != nil {
 		return domain.RunEnvelope{}, err
 	}
+	runPayload := map[string]any{
+		"runbook_slug": runbookSlug,
+		"surface":      actor.Surface,
+		"agent":        actor.Agent,
+	}
+	// Record the human behind the request when one is attributed (e.g. a
+	// console operator or an agent acting on a user's behalf via X-Actor-User),
+	// so the audit trail keeps the "who", not just the surface and agent.
+	if actor.User != "" {
+		runPayload["user"] = actor.User
+	}
 	_, _ = s.repo.CreateAuditEvent(ctx, domain.AuditEvent{
 		ID:          uuid.NewString(),
 		OrgID:       orgID,
@@ -316,12 +327,8 @@ func (s *ControlPlane) CreateRun(ctx context.Context, orgID, workspaceID, enviro
 		RunID:       run.ID,
 		Kind:        "run.created",
 		Message:     "Run created",
-		Payload: map[string]any{
-			"runbook_slug": runbookSlug,
-			"surface":      actor.Surface,
-			"agent":        actor.Agent,
-		},
-		CreatedAt: s.now(),
+		Payload:     runPayload,
+		CreatedAt:   s.now(),
 	})
 	return s.GetRunEnvelope(ctx, orgID, run.ID)
 }
@@ -405,7 +412,7 @@ func (s *ControlPlane) ListApprovals(ctx context.Context, orgID, workspaceID str
 	return s.repo.ListApprovals(ctx, workspaceID)
 }
 
-func (s *ControlPlane) DecideApproval(ctx context.Context, orgID, approvalID, decision, note string) (domain.RunEnvelope, error) {
+func (s *ControlPlane) DecideApproval(ctx context.Context, orgID, approvalID, decision, note string, actor domain.Actor) (domain.RunEnvelope, error) {
 	approval, err := s.repo.GetApproval(ctx, approvalID)
 	if err != nil {
 		return domain.RunEnvelope{}, err
@@ -429,9 +436,16 @@ func (s *ControlPlane) DecideApproval(ctx context.Context, orgID, approvalID, de
 		return domain.RunEnvelope{}, errors.New("decision must be approve or reject")
 	}
 	now := s.now()
+	// Attribute the decision to whoever made it: prefer the actor's user
+	// identity, falling back to its agent, so the immutable trail (and the
+	// approval record itself) can answer "who approved this write?".
+	decidedBy := strings.TrimSpace(actor.User)
+	if decidedBy == "" {
+		decidedBy = strings.TrimSpace(actor.Agent)
+	}
 	// The repository transition is compare-and-swap on the pending status, so
 	// concurrent decisions cannot both win.
-	approval, err = s.repo.DecideApproval(ctx, approvalID, status, strings.TrimSpace(note), now)
+	approval, err = s.repo.DecideApproval(ctx, approvalID, status, strings.TrimSpace(note), decidedBy, now)
 	if err != nil {
 		return domain.RunEnvelope{}, err
 	}
@@ -456,6 +470,9 @@ func (s *ControlPlane) DecideApproval(ctx context.Context, orgID, approvalID, de
 		Message:           "Approval " + approval.Status,
 		Payload: map[string]any{
 			"decision_note": approval.DecisionNote,
+			"decided_by":    approval.DecidedBy,
+			"surface":       actor.Surface,
+			"agent":         actor.Agent,
 		},
 		CreatedAt: now,
 	})

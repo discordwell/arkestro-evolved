@@ -296,7 +296,7 @@ func (s *Server) handleApprove(w http.ResponseWriter, r *http.Request) error {
 		Note string `json:"note"`
 	}
 	_ = json.NewDecoder(r.Body).Decode(&req)
-	item, err := s.service.DecideApproval(r.Context(), s.orgID(r), chi.URLParam(r, "approvalID"), "approve", req.Note)
+	item, err := s.service.DecideApproval(r.Context(), s.orgID(r), chi.URLParam(r, "approvalID"), "approve", req.Note, s.actor(r))
 	if err != nil {
 		return err
 	}
@@ -308,7 +308,7 @@ func (s *Server) handleReject(w http.ResponseWriter, r *http.Request) error {
 		Note string `json:"note"`
 	}
 	_ = json.NewDecoder(r.Body).Decode(&req)
-	item, err := s.service.DecideApproval(r.Context(), s.orgID(r), chi.URLParam(r, "approvalID"), "reject", req.Note)
+	item, err := s.service.DecideApproval(r.Context(), s.orgID(r), chi.URLParam(r, "approvalID"), "reject", req.Note, s.actor(r))
 	if err != nil {
 		return err
 	}

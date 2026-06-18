@@ -150,12 +150,14 @@ CREATE TABLE IF NOT EXISTS approval_requests (
   status TEXT NOT NULL,
   reason TEXT NOT NULL,
   decision_note TEXT NOT NULL DEFAULT '',
+  decided_by TEXT NOT NULL DEFAULT '',
   requested_by_surface TEXT NOT NULL,
   requested_by_agent TEXT NOT NULL,
   created_at TIMESTAMPTZ NOT NULL,
   decided_at TIMESTAMPTZ
 );
 ALTER TABLE approval_requests ADD COLUMN IF NOT EXISTS step_index INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE approval_requests ADD COLUMN IF NOT EXISTS decided_by TEXT NOT NULL DEFAULT '';
 CREATE INDEX IF NOT EXISTS idx_approval_requests_workspace_id ON approval_requests(workspace_id);
 CREATE INDEX IF NOT EXISTS idx_approval_requests_run_id ON approval_requests(run_id);
 
@@ -461,15 +463,15 @@ FROM artifacts WHERE id = $1
 
 func (p *Postgres) CreateApproval(ctx context.Context, approval domain.ApprovalRequest) (domain.ApprovalRequest, error) {
 	_, err := p.db.Exec(ctx, `
-INSERT INTO approval_requests(id, run_id, workspace_id, step_index, status, reason, decision_note, requested_by_surface, requested_by_agent, created_at, decided_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NULL)
-`, approval.ID, approval.RunID, approval.WorkspaceID, approval.StepIndex, approval.Status, approval.Reason, approval.DecisionNote, approval.RequestedBySurface, approval.RequestedByAgent, approval.CreatedAt)
+INSERT INTO approval_requests(id, run_id, workspace_id, step_index, status, reason, decision_note, decided_by, requested_by_surface, requested_by_agent, created_at, decided_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NULL)
+`, approval.ID, approval.RunID, approval.WorkspaceID, approval.StepIndex, approval.Status, approval.Reason, approval.DecisionNote, approval.DecidedBy, approval.RequestedBySurface, approval.RequestedByAgent, approval.CreatedAt)
 	return approval, err
 }
 
 func (p *Postgres) ListApprovals(ctx context.Context, workspaceID string) ([]domain.ApprovalRequest, error) {
 	rows, err := p.db.Query(ctx, `
-SELECT id, run_id, workspace_id, step_index, status, reason, decision_note, requested_by_surface, requested_by_agent, created_at, decided_at
+SELECT id, run_id, workspace_id, step_index, status, reason, decision_note, decided_by, requested_by_surface, requested_by_agent, created_at, decided_at
 FROM approval_requests
 WHERE workspace_id = $1
 ORDER BY created_at DESC, id DESC
@@ -483,7 +485,7 @@ ORDER BY created_at DESC, id DESC
 
 func (p *Postgres) ListApprovalsByRun(ctx context.Context, runID string) ([]domain.ApprovalRequest, error) {
 	rows, err := p.db.Query(ctx, `
-SELECT id, run_id, workspace_id, step_index, status, reason, decision_note, requested_by_surface, requested_by_agent, created_at, decided_at
+SELECT id, run_id, workspace_id, step_index, status, reason, decision_note, decided_by, requested_by_surface, requested_by_agent, created_at, decided_at
 FROM approval_requests
 WHERE run_id = $1
 ORDER BY created_at DESC, id DESC
@@ -497,20 +499,20 @@ ORDER BY created_at DESC, id DESC
 
 func (p *Postgres) GetApproval(ctx context.Context, id string) (domain.ApprovalRequest, error) {
 	row := p.db.QueryRow(ctx, `
-SELECT id, run_id, workspace_id, step_index, status, reason, decision_note, requested_by_surface, requested_by_agent, created_at, decided_at
+SELECT id, run_id, workspace_id, step_index, status, reason, decision_note, decided_by, requested_by_surface, requested_by_agent, created_at, decided_at
 FROM approval_requests WHERE id = $1
 `, id)
 	out, err := scanApproval(row)
 	return out, mapNotFound("approval", err)
 }
 
-func (p *Postgres) DecideApproval(ctx context.Context, id, status, note string, decidedAt time.Time) (domain.ApprovalRequest, error) {
+func (p *Postgres) DecideApproval(ctx context.Context, id, status, note, decidedBy string, decidedAt time.Time) (domain.ApprovalRequest, error) {
 	row := p.db.QueryRow(ctx, `
 UPDATE approval_requests
-SET status = $2, decision_note = $3, decided_at = $4
+SET status = $2, decision_note = $3, decided_by = $4, decided_at = $5
 WHERE id = $1 AND status = 'pending'
-RETURNING id, run_id, workspace_id, step_index, status, reason, decision_note, requested_by_surface, requested_by_agent, created_at, decided_at
-`, id, status, note, decidedAt)
+RETURNING id, run_id, workspace_id, step_index, status, reason, decision_note, decided_by, requested_by_surface, requested_by_agent, created_at, decided_at
+`, id, status, note, decidedBy, decidedAt)
 	out, err := scanApproval(row)
 	if errors.Is(err, pgx.ErrNoRows) {
 		// Distinguish a lost race from a missing record.
@@ -672,7 +674,7 @@ func scanApproval(row scanner) (domain.ApprovalRequest, error) {
 		out       domain.ApprovalRequest
 		decidedAt *time.Time
 	)
-	err := row.Scan(&out.ID, &out.RunID, &out.WorkspaceID, &out.StepIndex, &out.Status, &out.Reason, &out.DecisionNote, &out.RequestedBySurface, &out.RequestedByAgent, &out.CreatedAt, &decidedAt)
+	err := row.Scan(&out.ID, &out.RunID, &out.WorkspaceID, &out.StepIndex, &out.Status, &out.Reason, &out.DecisionNote, &out.DecidedBy, &out.RequestedBySurface, &out.RequestedByAgent, &out.CreatedAt, &decidedAt)
 	if err != nil {
 		return out, err
 	}

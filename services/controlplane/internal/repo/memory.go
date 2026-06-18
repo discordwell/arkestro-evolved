@@ -364,7 +364,7 @@ func (m *Memory) GetApproval(_ context.Context, id string) (domain.ApprovalReque
 	return approval, nil
 }
 
-func (m *Memory) DecideApproval(_ context.Context, id, status, note string, decidedAt time.Time) (domain.ApprovalRequest, error) {
+func (m *Memory) DecideApproval(_ context.Context, id, status, note, decidedBy string, decidedAt time.Time) (domain.ApprovalRequest, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	approval, ok := m.approvals[id]
@@ -376,6 +376,7 @@ func (m *Memory) DecideApproval(_ context.Context, id, status, note string, deci
 	}
 	approval.Status = status
 	approval.DecisionNote = note
+	approval.DecidedBy = decidedBy
 	approval.DecidedAt = decidedAt
 	m.approvals[id] = approval
 	return approval, nil

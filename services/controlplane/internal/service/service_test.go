@@ -96,7 +96,7 @@ func TestReleaseRunRequiresApprovalThenCompletes(t *testing.T) {
 	if len(waiting.Approvals) != 1 {
 		t.Fatalf("expected approval request")
 	}
-	if _, err := svc.DecideApproval(context.Background(), "org-1", waiting.Approvals[0].ID, "approve", "ship it"); err != nil {
+	if _, err := svc.DecideApproval(context.Background(), "org-1", waiting.Approvals[0].ID, "approve", "ship it", domain.Actor{Surface: "console", Agent: "human", User: "approver@test.local"}); err != nil {
 		t.Fatalf("approve: %v", err)
 	}
 	if _, err := svc.ProcessNextRun(context.Background()); err != nil {
@@ -206,7 +206,7 @@ func TestDecideApprovalCrossOrgIsForbiddenAndDoesNotMutate(t *testing.T) {
 	waiting := awaitApproval(t, svc, "org-1", workspace.ID, env.ID)
 	approvalID := waiting.Approvals[0].ID
 
-	if _, err := svc.DecideApproval(ctx, "org-2", approvalID, "approve", "sneaky"); !errors.Is(err, service.ErrForbidden) {
+	if _, err := svc.DecideApproval(ctx, "org-2", approvalID, "approve", "sneaky", domain.Actor{Surface: "api", Agent: "human", User: "intruder@test.local"}); !errors.Is(err, service.ErrForbidden) {
 		t.Fatalf("expected ErrForbidden, got %v", err)
 	}
 
@@ -222,7 +222,7 @@ func TestDecideApprovalCrossOrgIsForbiddenAndDoesNotMutate(t *testing.T) {
 	}
 
 	// The rightful org can still decide the untouched approval.
-	if _, err := svc.DecideApproval(ctx, "org-1", approvalID, "approve", "ok"); err != nil {
+	if _, err := svc.DecideApproval(ctx, "org-1", approvalID, "approve", "ok", domain.Actor{Surface: "console", Agent: "human", User: "approver@test.local"}); err != nil {
 		t.Fatalf("legitimate approval failed: %v", err)
 	}
 }
@@ -244,7 +244,7 @@ func TestConcurrentApprovalDecisionsHaveOneWinner(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_, err := svc.DecideApproval(ctx, "org-1", approvalID, "approve", "go")
+			_, err := svc.DecideApproval(ctx, "org-1", approvalID, "approve", "go", domain.Actor{Surface: "console", Agent: "human", User: "approver@test.local"})
 			switch {
 			case err == nil:
 				wins.Add(1)
@@ -277,7 +277,7 @@ func TestDecideApprovalRejectsInvalidDecision(t *testing.T) {
 	ctx := context.Background()
 
 	waiting := awaitApproval(t, svc, "org-1", workspace.ID, env.ID)
-	if _, err := svc.DecideApproval(ctx, "org-1", waiting.Approvals[0].ID, "maybe", ""); err == nil {
+	if _, err := svc.DecideApproval(ctx, "org-1", waiting.Approvals[0].ID, "maybe", "", domain.Actor{Surface: "console", Agent: "human", User: "approver@test.local"}); err == nil {
 		t.Fatalf("expected invalid decision to fail")
 	}
 	after, err := svc.GetRunEnvelope(ctx, "org-1", waiting.Run.ID)
@@ -286,6 +286,87 @@ func TestDecideApprovalRejectsInvalidDecision(t *testing.T) {
 	}
 	if after.Approvals[0].Status != "pending" {
 		t.Fatalf("invalid decision must not persist, approval status=%s", after.Approvals[0].Status)
+	}
+}
+
+func eventByKind(t *testing.T, events []domain.AuditEvent, kind string) domain.AuditEvent {
+	t.Helper()
+	for _, event := range events {
+		if event.Kind == kind {
+			return event
+		}
+	}
+	t.Fatalf("no %q audit event found among %d events", kind, len(events))
+	return domain.AuditEvent{}
+}
+
+// A decided approval must attribute the decision to whoever made it — both as
+// a first-class field on the approval and in the immutable audit trail — so a
+// control plane can answer "who approved this write?". The initiating user must
+// likewise survive on the run.created event.
+func TestApprovalDecisionRecordsDecider(t *testing.T) {
+	svc := newService(t)
+	workspace, env := setupWorkspace(t, svc)
+	ctx := context.Background()
+
+	run, err := svc.CreateRun(ctx, "org-1", workspace.ID, env.ID, "release-coordination",
+		domain.Actor{Surface: "mcp", Agent: "claude", User: "initiator@test.local"}, nil)
+	if err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	if _, err := svc.ProcessNextRun(ctx); err != nil {
+		t.Fatalf("process: %v", err)
+	}
+	waiting, err := svc.GetRunEnvelope(ctx, "org-1", run.Run.ID)
+	if err != nil {
+		t.Fatalf("get run: %v", err)
+	}
+	if waiting.Run.Status != "awaiting_approval" || len(waiting.Approvals) != 1 {
+		t.Fatalf("expected one pending approval, got status=%s approvals=%d", waiting.Run.Status, len(waiting.Approvals))
+	}
+	if waiting.Approvals[0].DecidedBy != "" {
+		t.Fatalf("a pending approval must not carry a decider, got %q", waiting.Approvals[0].DecidedBy)
+	}
+
+	// The initiating human is preserved on run.created, not just surface/agent.
+	created := eventByKind(t, waiting.Events, "run.created")
+	if created.Payload["user"] != "initiator@test.local" {
+		t.Fatalf("run.created must record the initiating user, got %v", created.Payload["user"])
+	}
+
+	decided, err := svc.DecideApproval(ctx, "org-1", waiting.Approvals[0].ID, "approve", "ship it",
+		domain.Actor{Surface: "console", Agent: "human", User: "approver@test.local"})
+	if err != nil {
+		t.Fatalf("approve: %v", err)
+	}
+	if decided.Approvals[0].DecidedBy != "approver@test.local" {
+		t.Fatalf("expected approval attributed to approver, got %q", decided.Approvals[0].DecidedBy)
+	}
+
+	approved := eventByKind(t, decided.Events, "approval.approved")
+	if approved.Payload["decided_by"] != "approver@test.local" {
+		t.Fatalf("approval.approved must record decided_by, got %v", approved.Payload["decided_by"])
+	}
+	if approved.Payload["surface"] != "console" || approved.Payload["agent"] != "human" {
+		t.Fatalf("approval.approved must record decider surface/agent, got surface=%v agent=%v", approved.Payload["surface"], approved.Payload["agent"])
+	}
+}
+
+// When the deciding actor carries no user identity (e.g. a pure agent with no
+// X-Actor-User), the decision is still attributed — falling back to the agent.
+func TestDecideApprovalFallsBackToAgentWhenNoUser(t *testing.T) {
+	svc := newService(t)
+	workspace, env := setupWorkspace(t, svc)
+	ctx := context.Background()
+
+	waiting := awaitApproval(t, svc, "org-1", workspace.ID, env.ID)
+	decided, err := svc.DecideApproval(ctx, "org-1", waiting.Approvals[0].ID, "reject", "not now",
+		domain.Actor{Surface: "mcp", Agent: "codex"})
+	if err != nil {
+		t.Fatalf("reject: %v", err)
+	}
+	if decided.Approvals[0].DecidedBy != "codex" {
+		t.Fatalf("expected fallback to agent, got %q", decided.Approvals[0].DecidedBy)
 	}
 }
 
@@ -365,7 +446,7 @@ func TestRunbookWithTwoApprovalStepsGatesTwice(t *testing.T) {
 		t.Fatalf("expected first approval scoped to step 1, got %d", first.StepIndex)
 	}
 
-	if _, err := svc.DecideApproval(ctx, "org-1", first.ID, "approve", "gate one"); err != nil {
+	if _, err := svc.DecideApproval(ctx, "org-1", first.ID, "approve", "gate one", domain.Actor{Surface: "console", Agent: "human", User: "approver@test.local"}); err != nil {
 		t.Fatalf("approve first gate: %v", err)
 	}
 	if _, err := svc.ProcessNextRun(ctx); err != nil {
@@ -386,7 +467,7 @@ func TestRunbookWithTwoApprovalStepsGatesTwice(t *testing.T) {
 		t.Fatalf("second gate must create its own approval request")
 	}
 
-	if _, err := svc.DecideApproval(ctx, "org-1", second.ID, "approve", "gate two"); err != nil {
+	if _, err := svc.DecideApproval(ctx, "org-1", second.ID, "approve", "gate two", domain.Actor{Surface: "console", Agent: "human", User: "approver@test.local"}); err != nil {
 		t.Fatalf("approve second gate: %v", err)
 	}
 	if _, err := svc.ProcessNextRun(ctx); err != nil {

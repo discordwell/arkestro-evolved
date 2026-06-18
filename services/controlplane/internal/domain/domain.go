@@ -151,7 +151,13 @@ type ApprovalRequest struct {
 	RequestedBySurface string    `json:"requested_by_surface"`
 	RequestedByAgent   string    `json:"requested_by_agent"`
 	CreatedAt          time.Time `json:"created_at"`
-	DecidedAt          time.Time `json:"decided_at,omitempty"`
+	// DecidedBy attributes the approve/reject decision to whoever made it —
+	// the deciding actor's user identity, falling back to its agent. It is
+	// empty while the approval is still pending. This is the auditable answer
+	// to "who approved this write?", surfaced in the run envelope and console
+	// inbox rather than only buried in audit-event payloads.
+	DecidedBy string    `json:"decided_by,omitempty"`
+	DecidedAt time.Time `json:"decided_at,omitempty"`
 }
 
 type PolicyRule struct {

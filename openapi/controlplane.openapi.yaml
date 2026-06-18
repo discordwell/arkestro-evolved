@@ -595,6 +595,9 @@ components:
         status: { type: string }
         reason: { type: string }
         decision_note: { type: string }
+        decided_by:
+          type: string
+          description: Identity of whoever approved or rejected the request (the deciding actor's user, falling back to its agent). Empty while pending.
         requested_by_surface: { type: string }
         requested_by_agent: { type: string }
         created_at:
