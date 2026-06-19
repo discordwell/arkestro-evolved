@@ -652,6 +652,61 @@ func TestPolicyRefusesUngatedWrite(t *testing.T) {
 	}
 }
 
+// A run that fails partway through must record the step it actually reached, not
+// reset current_step to its claim-time value. The worker advances current_step
+// as it executes, so a failed run's terminal record has to reflect that progress
+// or it contradicts the audit trail (a write that failed at step 1 would
+// misreport as failing at step 0). The run.failed event names the failing step.
+func TestFailedRunPreservesProgressStep(t *testing.T) {
+	cat := catalog.Catalog{
+		Version: 1,
+		Runbooks: []domain.Runbook{{
+			Slug:             "ungated",
+			Title:            "Ungated Write",
+			Family:           "test",
+			ApprovalRequired: false,
+			Steps: []domain.RunbookStep{
+				{Slug: "collect", Kind: "read"}, // index 0
+				{Slug: "apply", Kind: "write"},  // index 1 — fails the policy gate here
+			},
+		}},
+	}
+	svc, _ := newServiceWithCatalog(t, cat)
+	ctx := context.Background()
+	workspace, err := svc.CreateWorkspace(ctx, "org-1", "Ops", "ops", "")
+	if err != nil {
+		t.Fatalf("workspace: %v", err)
+	}
+
+	run, err := svc.CreateRun(ctx, "org-1", workspace.ID, "", "ungated", domain.Actor{Surface: "test", Agent: "test"}, nil)
+	if err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	if _, err := svc.ProcessNextRun(ctx); err == nil {
+		t.Fatalf("expected the ungated write to fail the run")
+	}
+
+	after, err := svc.GetRunEnvelope(ctx, "org-1", run.Run.ID)
+	if err != nil {
+		t.Fatalf("get run: %v", err)
+	}
+	if after.Run.Status != "failed" {
+		t.Fatalf("expected failed run, got %s", after.Run.Status)
+	}
+	if after.Run.CurrentStep != 1 {
+		t.Fatalf("failed run must retain the step it reached (1, the write), got %d", after.Run.CurrentStep)
+	}
+
+	failed := eventByKind(t, after.Events, "run.failed")
+	// JSON round-trips numbers as float64; the in-memory repo keeps the int.
+	if got := failed.Payload["current_step"]; got != 1 && got != float64(1) {
+		t.Fatalf("run.failed must record the failing step index, got %v", got)
+	}
+	if failed.Payload["step"] != "apply" {
+		t.Fatalf("run.failed must name the failing step slug, got %v", failed.Payload["step"])
+	}
+}
+
 // A gated write whose approval was granted still executes: the policy check is
 // satisfied by the approved gate, so enforcement never blocks the happy path.
 func TestPolicyAllowsApprovedWrite(t *testing.T) {

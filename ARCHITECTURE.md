@@ -89,6 +89,12 @@ queued -> running -> [awaiting_approval -> queued] -> completed | failed | rejec
   but no preceding approval gate has been approved for the run, the worker
   records a `policy.violation` audit event and fails the run instead of
   performing the unguarded write.
+- When a step fails, the run is marked `failed` at the step it actually
+  reached: the worker reloads the persisted run (whose `current_step` advanced
+  as it executed) before recording the terminal state, and the `run.failed`
+  audit event names the failing step. So a write that fails at step 3 reports
+  `current_step` 3, consistent with the audit trail, rather than resetting to
+  its claim-time value.
 
 Approval decisions are tenant-checked against the owning run's org **before**
 any state is persisted (`service.DecideApproval`), and the pending→decided

@@ -555,7 +555,16 @@ func (s *ControlPlane) ProcessNextRun(ctx context.Context) (bool, error) {
 	if err != nil || !ok {
 		return ok, err
 	}
-	if err := s.processRun(ctx, run); err != nil {
+	if procErr := s.processRun(ctx, run); procErr != nil {
+		// processRun advances and persists CurrentStep (and other run state) as
+		// it goes, but our local copy still holds the value from claim time.
+		// Reload before marking the run failed so the terminal record reflects
+		// the step the run actually reached — otherwise current_step resets to
+		// its claim-time value and a write that failed at step 3 misreports as
+		// failing at step 0, contradicting the audit trail.
+		if latest, getErr := s.repo.GetTaskRun(ctx, run.ID); getErr == nil {
+			run = latest
+		}
 		run.Status = "failed"
 		run.UpdatedAt = s.now()
 		_, _ = s.repo.UpdateTaskRun(ctx, run)
@@ -565,13 +574,25 @@ func (s *ControlPlane) ProcessNextRun(ctx context.Context) (bool, error) {
 			WorkspaceID: run.WorkspaceID,
 			RunID:       run.ID,
 			Kind:        "run.failed",
-			Message:     err.Error(),
-			Payload:     map[string]any{},
+			Message:     procErr.Error(),
+			Payload:     s.failurePayload(run),
 			CreatedAt:   s.now(),
 		})
-		return true, err
+		return true, procErr
 	}
 	return true, nil
+}
+
+// failurePayload describes where a run failed: the step index it reached and,
+// when the runbook is still in the catalog, that step's slug — so the
+// run.failed event names the failing step the way step.read / step.write do,
+// instead of carrying an empty payload.
+func (s *ControlPlane) failurePayload(run domain.TaskRun) map[string]any {
+	payload := map[string]any{"current_step": run.CurrentStep}
+	if runbook, ok := s.catalog.Runbook(run.RunbookSlug); ok && run.CurrentStep < len(runbook.Steps) {
+		payload["step"] = runbook.Steps[run.CurrentStep].Slug
+	}
+	return payload
 }
 
 func (s *ControlPlane) processRun(ctx context.Context, run domain.TaskRun) error {
