@@ -488,6 +488,32 @@ func (s *ControlPlane) DecideApproval(ctx context.Context, orgID, approvalID, de
 		},
 		CreatedAt: now,
 	})
+	// A rejection terminates the run, so emit run.rejected alongside the
+	// approval-scoped event. Completion and failure each record their terminal
+	// transition with a run.<terminal> event (run.completed / run.failed);
+	// recording rejection the same way keeps the terminal-event model uniform,
+	// so a run's outcome is recoverable from run.* events alone instead of
+	// having to infer rejection from an approval event. It names the gate that
+	// stopped the run and who decided it, the way run.failed names the failing
+	// step. Approving is not terminal — the run re-queues and later emits
+	// run.completed or run.failed — so only rejection emits here.
+	if approval.Status == "rejected" {
+		_, _ = s.repo.CreateAuditEvent(ctx, domain.AuditEvent{
+			ID:                uuid.NewString(),
+			OrgID:             run.OrgID,
+			WorkspaceID:       run.WorkspaceID,
+			RunID:             run.ID,
+			ApprovalRequestID: approval.ID,
+			Kind:              "run.rejected",
+			Message:           "Run rejected",
+			Payload: map[string]any{
+				"approval_id": approval.ID,
+				"step_index":  approval.StepIndex,
+				"decided_by":  approval.DecidedBy,
+			},
+			CreatedAt: now,
+		})
+	}
 	return s.GetRunEnvelope(ctx, orgID, run.ID)
 }
 
@@ -676,8 +702,21 @@ func (s *ControlPlane) processRun(ctx context.Context, run domain.TaskRun) error
 				run.Status = "rejected"
 				run.ApprovalState = "rejected"
 				run.UpdatedAt = s.now()
-				_, err = s.repo.UpdateTaskRun(ctx, run)
-				return err
+				if _, err := s.repo.UpdateTaskRun(ctx, run); err != nil {
+					return err
+				}
+				// Same terminal-event invariant as the DecideApproval path: a
+				// run that ends rejected emits run.rejected. This branch only
+				// runs if the worker re-encounters an already-rejected approval
+				// (the normal reject path terminates the run without
+				// re-queueing it), so it is defense in depth — mirroring the
+				// catalog/worker double-guard on writes — and keeps the
+				// invariant total no matter how the transition is reached.
+				return s.appendEvent(ctx, run, "run.rejected", "Run rejected", map[string]any{
+					"approval_id": approval.ID,
+					"step_index":  approval.StepIndex,
+					"decided_by":  approval.DecidedBy,
+				})
 			}
 			if err := s.appendEvent(ctx, run, "approval.consumed", "Approval consumed", map[string]any{"approval_id": approval.ID}); err != nil {
 				return err

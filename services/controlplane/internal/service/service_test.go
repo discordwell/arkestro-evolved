@@ -353,6 +353,52 @@ func TestApprovalDecisionRecordsDecider(t *testing.T) {
 	}
 }
 
+// A rejection terminates the run, so it must be recorded by a run.rejected
+// event the same way completion emits run.completed and failure emits
+// run.failed — every terminal transition is uniformly represented, so a run's
+// outcome is recoverable from run.* events alone. The event names the gate that
+// stopped the run and who rejected it, alongside the approval-scoped event.
+func TestRejectedRunEmitsTerminalRunEvent(t *testing.T) {
+	svc := newService(t)
+	workspace, env := setupWorkspace(t, svc)
+	ctx := context.Background()
+
+	waiting := awaitApproval(t, svc, "org-1", workspace.ID, env.ID)
+	approval := pendingApproval(t, waiting)
+
+	rejected, err := svc.DecideApproval(ctx, "org-1", approval.ID, "reject", "not safe",
+		domain.Actor{Surface: "console", Agent: "human", User: "approver@test.local"})
+	if err != nil {
+		t.Fatalf("reject: %v", err)
+	}
+	if rejected.Run.Status != "rejected" {
+		t.Fatalf("expected rejected run, got %s", rejected.Run.Status)
+	}
+
+	// The approval-scoped event is still present; run.rejected complements it.
+	eventByKind(t, rejected.Events, "approval.rejected")
+
+	event := eventByKind(t, rejected.Events, "run.rejected")
+	if event.Payload["approval_id"] != approval.ID {
+		t.Fatalf("run.rejected must name the rejecting approval, got %v", event.Payload["approval_id"])
+	}
+	if event.Payload["decided_by"] != "approver@test.local" {
+		t.Fatalf("run.rejected must record who rejected, got %v", event.Payload["decided_by"])
+	}
+	// JSON round-trips numbers as float64; the in-memory repo keeps the int.
+	if got := event.Payload["step_index"]; got != approval.StepIndex && got != float64(approval.StepIndex) {
+		t.Fatalf("run.rejected must name the gated step index (%d), got %v", approval.StepIndex, got)
+	}
+
+	// run.rejected is the run's only terminal event: a rejected run must not also
+	// carry run.completed or run.failed, so each terminal state stays distinct.
+	for _, e := range rejected.Events {
+		if e.Kind == "run.completed" || e.Kind == "run.failed" {
+			t.Fatalf("a rejected run must not also carry %s", e.Kind)
+		}
+	}
+}
+
 // When the deciding actor carries no user identity (e.g. a pure agent with no
 // X-Actor-User), the decision is still attributed — falling back to the agent.
 func TestDecideApprovalFallsBackToAgentWhenNoUser(t *testing.T) {

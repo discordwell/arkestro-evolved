@@ -74,14 +74,17 @@ queued -> running -> [awaiting_approval -> queued] -> completed | failed | rejec
   and advances steps, emitting audit events per step.
 - An `approval` step creates an `approval_request` scoped to that step
   (`step_index`), parks the run in `awaiting_approval`, and stops. Approving
-  re-queues the run; rejecting terminates it as `rejected`. The decision is
-  attributed to whoever made it: the deciding actor's identity is recorded on
-  the approval as `decided_by` (its user, falling back to its agent) and in the
-  `approval.approved` / `approval.rejected` audit event, so the trail answers
-  "who approved this write?". A runbook with several approval steps gates on
-  each one — a decision never satisfies a later gate. (Approvals persisted
-  before step scoping carry index 0 and are honored for the runbook's first
-  approval step.)
+  re-queues the run; rejecting terminates it as `rejected` and emits a
+  `run.rejected` event naming the gate that stopped the run and who decided it
+  (approving is not terminal — the run re-queues and later reaches
+  `run.completed` or `run.failed` — so only rejection records a terminal event
+  at decision time). The decision is attributed to whoever made it: the deciding
+  actor's identity is recorded on the approval as `decided_by` (its user,
+  falling back to its agent) and in the `approval.approved` / `approval.rejected`
+  audit event, so the trail answers "who approved this write?". A runbook with
+  several approval steps gates on each one — a decision never satisfies a later
+  gate. (Approvals persisted before step scoping carry index 0 and are honored
+  for the runbook's first approval step.)
 - `artifact` steps write markdown documents to the object store and register
   them with the run.
 - Before a `write` step executes, the worker evaluates the workspace's policy
@@ -95,6 +98,12 @@ queued -> running -> [awaiting_approval -> queued] -> completed | failed | rejec
   audit event names the failing step. So a write that fails at step 3 reports
   `current_step` 3, consistent with the audit trail, rather than resetting to
   its claim-time value.
+- Every terminal transition is recorded by a single `run.<terminal>` event —
+  `run.completed`, `run.failed`, or `run.rejected` — so a run's outcome (and
+  when it ended) is recoverable from the `run.*` events alone, without inferring
+  rejection from an approval-scoped event. The `run.rejected` payload carries
+  the `approval_id`, `step_index`, and `decided_by` of the gate that stopped the
+  run, mirroring how `run.failed` names the failing step.
 
 Approval decisions are tenant-checked against the owning run's org **before**
 any state is persisted (`service.DecideApproval`), and the pending→decided

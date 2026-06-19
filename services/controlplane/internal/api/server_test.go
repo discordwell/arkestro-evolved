@@ -484,3 +484,70 @@ func TestApprovalFlowOverHTTP(t *testing.T) {
 		t.Fatalf("expected completed run, got %v", status)
 	}
 }
+
+// Rejecting an approval terminates the run as rejected and records the terminal
+// transition with a run.rejected audit event, uniformly with the run.completed
+// and run.failed events the other terminal states emit — so the outcome flows
+// through the HTTP surface like any other terminal run.
+func TestRejectingApprovalTerminatesRunOverHTTP(t *testing.T) {
+	server, svc := newTestServer(t)
+	client := login(t, server)
+	ctx := context.Background()
+
+	workspace := client.mustDo(http.MethodPost, "/v1/workspaces", map[string]string{
+		"name": "Reject", "slug": "reject",
+	}, http.StatusCreated)
+	workspaceID, _ := itemField(t, workspace, "item", "id").(string)
+
+	created := client.mustDo(http.MethodPost, "/v1/runs", map[string]any{
+		"workspace_id": workspaceID,
+		"runbook_slug": "release-coordination",
+	}, http.StatusCreated)
+	runID, _ := itemField(t, created, "item", "run", "id").(string)
+
+	if _, err := svc.ProcessNextRun(ctx); err != nil {
+		t.Fatalf("process run: %v", err)
+	}
+
+	approvals := client.mustDo(http.MethodGet, "/v1/approvals?workspace_id="+workspaceID, nil, http.StatusOK)
+	approvalItems, _ := approvals["items"].([]any)
+	if len(approvalItems) != 1 {
+		t.Fatalf("expected one approval, got %v", approvals)
+	}
+	approval, _ := approvalItems[0].(map[string]any)
+	approvalID, _ := approval["id"].(string)
+
+	decided := client.mustDo(http.MethodPost, "/v1/approvals/"+approvalID+"/reject", map[string]string{"note": "stand down"}, http.StatusOK)
+	if status := itemField(t, decided, "item", "run", "status"); status != "rejected" {
+		t.Fatalf("expected rejected run, got %v", status)
+	}
+
+	// The run is terminal; the worker must never claim it again.
+	processed, err := svc.ProcessNextRun(ctx)
+	if err != nil {
+		t.Fatalf("process after rejection: %v", err)
+	}
+	if processed {
+		t.Fatalf("a rejected run must not be re-claimed by the worker")
+	}
+
+	events := client.mustDo(http.MethodGet, "/v1/audit-events?workspace_id="+workspaceID+"&run_id="+runID, nil, http.StatusOK)
+	eventItems, _ := events["items"].([]any)
+	sawRunRejected := false
+	for _, raw := range eventItems {
+		event, _ := raw.(map[string]any)
+		if event["kind"] == "run.rejected" {
+			sawRunRejected = true
+			payload, _ := event["payload"].(map[string]any)
+			if payload["approval_id"] != approvalID {
+				t.Fatalf("run.rejected must name the rejecting approval, got %v", payload["approval_id"])
+			}
+			if payload["decided_by"] != testEmail {
+				t.Fatalf("run.rejected must record the deciding approver, got %v", payload["decided_by"])
+			}
+		}
+	}
+	if !sawRunRejected {
+		t.Fatalf("expected a run.rejected terminal event, got %v", eventItems)
+	}
+}
